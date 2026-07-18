@@ -35,9 +35,55 @@ DCSD/serial cables are fine for verbose UART, but **normal USB must reappear as 
 
 ## Setup
 
+macOS only. One-shot:
+
 ```bash
 ./setup.sh
-# or: brew install python@3 curl blacktop/tap/ipsw && pip3 install -r requirements.txt
+```
+
+Or install dependencies yourself:
+
+**1. Homebrew** (if missing)
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+**2. System packages**
+
+```bash
+brew install python@3 curl
+brew install blacktop/tap/ipsw
+# optional fallback for iproxy:
+# brew install libimobiledevice
+```
+
+**3. Python packages**
+
+```bash
+pip3 install -r requirements.txt
+```
+
+| Package | Used for |
+|---------|----------|
+| `pyimg4` | IMG4 pack / unpack |
+| `capstone` | iBoot / kernel patch finders |
+| `Pillow` | logo generation |
+
+**4. Already in the repo** (`tools/darwin/`) — no install needed if the clone is complete:
+
+`irecovery`, `pzb`, `img4`, `gtar`, `trustcache`, `jq`, `usbliter8_boot`, `iproxy`, `sshpass`, `libusb`, etc.
+
+**5. Optional** — host `ldid` only if you rebuild / rebrand `restored_external` yourself:
+
+```bash
+brew install ldid
+```
+
+Check:
+
+```bash
+./status.sh
 ```
 
 ## Quick start
