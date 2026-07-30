@@ -58,8 +58,8 @@ DCSD/serial cables are fine for verbose UART, but **normal USB must reappear as 
 
 ```bash
 ./status.sh
-./build.sh --with-fw          # --kpf-set auto (default): 18→finder, 26→byte table
-./boot.sh --with-fw --no-logo
+./build.sh         # --kpf-set auto (default): 18→finder, 26→byte table
+./boot.sh
 ```
 
 SSH in, then mount everything:
