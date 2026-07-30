@@ -48,6 +48,23 @@ def encode_adrp(rd, pc, target_page):
 def encode_add_imm(rd, rn, imm12):
     return 0x91000000 | (imm12 << 10) | (rn << 5) | rd
 
+def decode_adr_imm(w):
+    immhi = (w >> 5) & 0x7FFFF
+    immlo = (w >> 29) & 0x3
+    imm = (immhi << 2) | immlo
+    if imm & (1 << 20):
+        imm -= (1 << 21)
+    return imm
+
+def encode_adr(rd, pc, target):
+    """Encode ADR Xd, #imm (21-bit signed PC-relative)."""
+    imm = target - pc
+    if imm < -(1 << 20) or imm >= (1 << 20):
+        raise ValueError(f"ADR imm out of range: {imm}")
+    immlo = imm & 0x3
+    immhi = (imm >> 2) & 0x7FFFF
+    return 0x10000000 | (immlo << 29) | (immhi << 5) | rd
+
 
 class IBootPatchfinder:
     def __init__(self, data, base=0x870000000, mode='ibec', verbose=True):
@@ -126,55 +143,126 @@ class IBootPatchfinder:
     def find_image4_callback(self):
         self.log("\n[1] image4_validate_property_callback")
 
+        # Prefer sites near "Unknown ASN1 type" xrefs (real image4 callback).
+        # iOS 17/18: inline stack-canary epilogue
+        #   CMP; B.NE fail; MOV X0, Xn; … RETAB
+        # iOS 26 mBoot: outlined canary helper
+        #   BL helper; B.NE fail; MOV X0, Xn; … RETAB
+        #   (fail path loads the ASN1 string — that is the anchor)
+
+        asn1 = self.find_string(b"Unknown ASN1 type")
+        anchors = []
+        if asn1 is not None:
+            anchors = self.find_adr_refs(asn1) + [
+                a for a, _ in self.find_adrp_add_refs(asn1)
+            ]
+            if not anchors:
+                anchors = [asn1]
+
+        # --- Pass A: outlined canary near ASN1 xref (iOS 26+) ---
+        # Shape: BL; B.NE; MOV X0, Xn   with B.NE within ~0x200 of ASN1 load.
+        if anchors:
+            best = None
+            best_dist = 10**9
+            for anchor in anchors:
+                lo = max(0, anchor - 0x200)
+                hi = min(self.size - 12, anchor + 0x40)
+                for off in range(lo, hi, 4):
+                    bl = rd32(self.data, off)
+                    bne = rd32(self.data, off + 4)
+                    mov = rd32(self.data, off + 8)
+                    if (bl >> 26) != 0b100101:  # BL
+                        continue
+                    if (bne & 0xFF00001F) != 0x54000001:  # B.NE
+                        continue
+                    if (mov & 0xFFE0FFE0) != 0xAA0003E0:  # MOV X0, Xn
+                        continue
+                    dist = abs((off + 4) - anchor)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best = off + 4  # patch the B.NE
+            if best is not None and best_dist < 0x200:
+                self.log(
+                    f"  selected outlined canary @ 0x{best:X} "
+                    f"(BL+B.NE+MOV near ASN1, dist=0x{best_dist:X})"
+                )
+                self.results["image4_callback_bne"] = best
+                self.results["image4_callback_mov"] = best + 4
+                self.emit(best, p32(NOP_U32), "NOP b.ne (image4 outlined canary)")
+                self.emit(
+                    best + 4, p32(MOV_X0_0_U32), "MOV X0, #0 (force image4 success)"
+                )
+                return True
+
+        # --- Pass B: classic inline canary (iOS 17/18) ---
+        sites = []
         CHUNK = 0x2000
         for start in range(0, min(self.size, self.code_end), CHUNK - 0x100):
             end = min(start + CHUNK, self.size)
             for off in range(start, end - 8, 4):
                 w = rd32(self.data, off)
-                # Look for B.NE followed by MOV X0, Xn
                 if (w & 0xFF00001F) != 0x54000001:  # B.NE
                     continue
                 nxt = rd32(self.data, off + 4)
                 if (nxt & 0xFFE0FFE0) != 0xAA0003E0:  # MOV X0, Xreg
                     continue
                 src_reg = (nxt >> 16) & 0x1F
-
-                # Verify CMP within 8 insns before
                 has_cmp = any(
-                    (rd32(self.data, off - k*4) & 0xFFE0FC1F) == 0xEB00001F
-                    or (rd32(self.data, off - k*4) & 0x7F20001F) == 0x6B00001F
-                    for k in range(1, 9) if off - k*4 >= 0
+                    (rd32(self.data, off - k * 4) & 0xFFE0FC1F) == 0xEB00001F
+                    or (rd32(self.data, off - k * 4) & 0x7F20001F) == 0x6B00001F
+                    for k in range(1, 9)
+                    if off - k * 4 >= 0
                 )
                 if not has_cmp:
                     continue
-
-                # Verify MOVN Wreg, #0 (sets -1) within 64 insns before
-                w_reg = src_reg  # Wreg version
                 has_movn = False
                 for k in range(1, 65):
-                    if off - k*4 < 0:
+                    if off - k * 4 < 0:
                         break
-                    prev = rd32(self.data, off - k*4)
-                    # MOVN Wn, #0
-                    if (prev & 0xFFE0001F) == (0x12800000 | w_reg):
+                    prev = rd32(self.data, off - k * 4)
+                    if (prev & 0xFFE0001F) == (0x12800000 | src_reg):
                         has_movn = True
                         break
-                    # MOV Wn, #-1 (alias for MOVN Wn, #0)
-                    if (prev & 0xFFFFFFFF) == (0x12800000 | w_reg):
-                        has_movn = True
-                        break
-
                 if not has_movn:
                     continue
+                sites.append(off)
 
-                self.results['image4_callback_bne'] = off
-                self.results['image4_callback_mov'] = off + 4
-                self.emit(off, p32(NOP_U32), "NOP b.ne (image4 canary check)")
-                self.emit(off + 4, p32(MOV_X0_0_U32), "MOV X0, #0 (force image4 success)")
-                return True
+        if not sites:
+            self.log("  [-] Not found")
+            return False
 
-        self.log("  [-] Not found")
-        return False
+        chosen = sites[0]
+        if anchors:
+            best = None
+            best_dist = 10**9
+            for off in sites:
+                for a in anchors:
+                    dist = abs(off - a)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best = off
+            # Real canary sits in the image4 callback (~0x100–0x200 from ASN1 xref).
+            if best is not None and best_dist < 0x1000:
+                chosen = best
+                self.log(
+                    f"  selected site @ 0x{chosen:X} "
+                    f"(near ASN1, dist=0x{best_dist:X}; "
+                    f"skipped {len(sites)-1} other hits incl. 0x{sites[0]:X})"
+                )
+            else:
+                self.log(
+                    f"  [-] no ASN1-near inline canary "
+                    f"(best dist=0x{best_dist:X}); refusing first-site fallback"
+                )
+                return False
+        else:
+            self.log(f"  using first site @ 0x{chosen:X} ({len(sites)} hits)")
+
+        self.results["image4_callback_bne"] = chosen
+        self.results["image4_callback_mov"] = chosen + 4
+        self.emit(chosen, p32(NOP_U32), "NOP b.ne (image4 canary check)")
+        self.emit(chosen + 4, p32(MOV_X0_0_U32), "MOV X0, #0 (force image4 success)")
+        return True
 
     # ─────────────────────────────────────────────
     # 2. CTRR lockdown NOP
@@ -283,16 +371,99 @@ class IBootPatchfinder:
                                 return self._inject_boot_args([(adrp_off, add_off)], new_args, f"Strategy 4: %%s near {check_str.decode()}")
             pos = idx + 1
 
+        # Strategy 5: iOS 18.x d321/etc — boot-args format uses ADR (not ADRP+ADD).
+        # Only rewrite ADRs that sit next to an ADR→rd=md0 (same handler). Redirecting
+        # every xref to the shared "%s" string breaks unrelated Recovery format paths.
+        self.log("  Strategy 5: scanning ADR refs to %%s near rd=md0...")
+        if rd_md0 is not None:
+            fmt_s = None
+            for off in range(max(0, rd_md0 - 0x100), min(rd_md0 + 0x100, self.size)):
+                if self.data[off:off + 3] == b'%s\x00':
+                    fmt_s = off
+                    break
+            if fmt_s is not None:
+                adr_refs = self.find_adr_refs(fmt_s)
+                rd_adrs = self.find_adr_refs(rd_md0)
+                near = [
+                    a for a in adr_refs
+                    if any(abs(a - r) < 0x200 for r in rd_adrs)
+                ] or (adr_refs[:1] if adr_refs and not rd_adrs else [])
+                if near:
+                    self.log(f"  ADR %%s candidates={len(adr_refs)} near_rd={len(near)}")
+                    return self._inject_boot_args_adr(
+                        near, new_args, "Strategy 5: ADR → %%s near rd=md0 ADR"
+                    )
+
         self.log("  [-] Boot-args pattern not found")
         return False
 
+    def find_adr_refs(self, target_off):
+        """Find ADR instructions whose PC-relative target is target_off."""
+        target_va = self.base + target_off
+        refs = []
+        # ADR sites live in code; scan generously (strings may sit past early code_end).
+        limit = min(self.size - 4, max(self.code_end, 0x200000))
+        for off in range(0, limit, 4):
+            w = rd32(self.data, off)
+            if (w & 0x9F000000) != 0x10000000:
+                continue
+            imm = decode_adr_imm(w)
+            if (self.base + off) + imm == target_va:
+                refs.append(off)
+        return refs
+
+    def _find_nul_slot(self, size_needed=64, prefer_reachable_from=None):
+        """Find aligned zero run. If prefer_reachable_from is a list of ADR sites,
+        pick a slot within ADR range (±1MiB) of every site."""
+        candidates = []
+        for off in range(0x14000, self.size - size_needed):
+            if off % 16:
+                continue
+            if self.data[off:off + size_needed] == b'\x00' * size_needed:
+                candidates.append(off)
+                if prefer_reachable_from is None and len(candidates) >= 1:
+                    break
+        if not candidates:
+            return None
+        if not prefer_reachable_from:
+            return candidates[0]
+        for slot in candidates:
+            ok = True
+            for adr_off in prefer_reachable_from:
+                imm = (self.base + slot) - (self.base + adr_off)
+                if imm < -(1 << 20) or imm >= (1 << 20):
+                    ok = False
+                    break
+            if ok:
+                return slot
+        return None
+
+    def _inject_boot_args_adr(self, adr_offs, new_args, strategy):
+        slot = self._find_nul_slot(64, prefer_reachable_from=adr_offs)
+        if slot is None:
+            self.log("  [-] No ADR-reachable NUL slot found")
+            return False
+
+        self.log(f"  {strategy}")
+        self.emit(slot, new_args, f"Write boot-args @ 0x{slot:X}")
+        self.results['boot_args_string'] = slot
+        slot_va = self.base + slot
+
+        for adr_off in adr_offs:
+            w = rd32(self.data, adr_off)
+            rd = w & 0x1F
+            pc = self.base + adr_off
+            try:
+                new_w = encode_adr(rd, pc, slot_va)
+            except ValueError as e:
+                self.log(f"  [-] ADR redirect failed @ 0x{adr_off:X}: {e}")
+                return False
+            self.emit(adr_off, p32(new_w), f"ADR redirect to boot-args @ 0x{adr_off:X}")
+        return True
+
     def _inject_boot_args(self, refs, new_args, strategy):
         # Find NUL slot for new string
-        slot = None
-        for off in range(0x14000, self.size - 64):
-            if self.data[off:off+64] == b'\x00' * 64 and off % 16 == 0:
-                slot = off
-                break
+        slot = self._find_nul_slot(64)
         if slot is None:
             self.log("  [-] No NUL slot found")
             return False

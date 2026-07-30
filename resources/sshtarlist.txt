@@ -54,6 +54,7 @@ work/sshtar/usr/bin/binbag
 work/sshtar/usr/bin/true
 work/sshtar/usr/bin/hostinfo
 work/sshtar/usr/bin/mount_filesystems
+work/sshtar/usr/bin/mount_ich
 work/sshtar/usr/bin/tar
 work/sshtar/usr/bin/false
 work/sshtar/usr/bin/login

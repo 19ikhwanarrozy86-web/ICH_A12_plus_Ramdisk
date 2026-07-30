@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Apply Leeksov kernel-patchfinder subsets (usbliter8ra1n matrix)."""
+"""Apply kernel patches for ICH A12/A13 ramdisk.
+
+iOS 17/18/26: Leeksov kernel_patchfinder (debugger + AMFI) — proven path.
+iOS 27:       finder + launch_constraints (TXM-era).
+
+Legacy: --kpf-set ios26-bytes applies ios26_kernel_byte_patches.py (build-specific;
+fails closed on mismatch — not used by build.sh auto).
+"""
 
 from __future__ import annotations
 
@@ -11,23 +18,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 KPF_PATH = ROOT / "kernel_patchfinder.py"
 
-# Named sets → result keys from KernelPatchfinder.find_all()
 SETS = {
     "debugger": ("PE_i_can_has_debugger",),
     "amfi": ("AMFIIsCDHashInTrustCache",),
     "launch": ("launch_constraints_func",),
 }
 
-# usbliter8ra1n README: iOS 15–18/26 → AMFI; iOS 27 → AMFI + TXM-era extras
+# Finder profiles (Leeksov pattern finder — same AMFI+debugger for 17/18/26).
 PROFILES = {
-    "ios15": ("debugger", "amfi"),
-    "ios16": ("debugger", "amfi"),
     "ios17": ("debugger", "amfi"),
     "ios18": ("debugger", "amfi"),
     "ios26": ("debugger", "amfi"),
     "ios27": ("debugger", "amfi", "launch"),
     "amfi": ("amfi",),
     "amfi+debugger": ("debugger", "amfi"),
+    "debugger+amfi": ("debugger", "amfi"),
 }
 
 ALL_KEYS = (
@@ -36,7 +41,6 @@ ALL_KEYS = (
     "launch_constraints_func",
 )
 
-# Always required for SSH binaries to execute
 REQUIRED_ALWAYS = {"AMFIIsCDHashInTrustCache"}
 
 
@@ -70,7 +74,7 @@ def parse_kpf_set(value: str) -> set[str]:
             continue
         if part not in SETS:
             raise SystemExit(
-                f"unknown kpf set {part!r}; expected all|ios15|ios16|ios17|ios18|ios26|ios27|"
+                f"unknown kpf set {part!r}; expected all|ios17|ios18|ios26|ios27|"
                 + "|".join(SETS)
                 + "|debugger+amfi|..."
             )
@@ -103,6 +107,42 @@ def apply_subset(pf, results: dict, wanted: set[str]) -> int:
     return n
 
 
+def apply_ios18_finder(data: bytes, wanted: set[str], *, quiet: bool, allow_missing: bool) -> bytes:
+    """Proven iOS 17/18 path: locate AMFI + debugger via patchfinder."""
+    kpf = load_kpf()
+    pf = kpf.KernelPatchfinder(data, verbose=not quiet)
+    results = pf.find_all()
+
+    missing = sorted(key for key in wanted if key not in results)
+    hard_missing = [k for k in missing if k in REQUIRED_ALWAYS or not allow_missing]
+    soft_missing = [k for k in missing if k not in hard_missing]
+    if hard_missing:
+        raise SystemExit(f"kernel patchfinder did not locate: {', '.join(hard_missing)}")
+    if soft_missing:
+        print(f"note: skipping missing optional targets: {', '.join(soft_missing)}")
+        wanted = set(wanted) - set(soft_missing)
+
+    if "AMFIIsCDHashInTrustCache" not in results:
+        raise SystemExit("AMFIIsCDHashInTrustCache not found — cannot patch for SSH")
+    wanted = set(wanted)
+    wanted.add("AMFIIsCDHashInTrustCache")
+
+    count = apply_subset(pf, results, wanted)
+    print(f"applied {count} instructions (iOS 17/18 finder) for {{{', '.join(sorted(wanted))}}}")
+    return bytes(pf.data)
+
+
+def apply_ios26_bytes(data: bytes, *, force: bool) -> bytes:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from ios26_kernel_byte_patches import apply_ios26_byte_patches
+
+    buf = bytearray(data)
+    n = apply_ios26_byte_patches(buf, force=force)
+    print(f"applied {n} bytes (iOS 26 fixed offset table)")
+    return bytes(buf)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="stock kernelcache.raw")
@@ -110,39 +150,39 @@ def main() -> None:
     parser.add_argument(
         "--kpf-set",
         default="ios18",
-        help="ios17|ios18|ios26|ios27|all|debugger|amfi|launch|debugger+amfi|...",
+        help="ios17|ios18|ios26|ios27|all|debugger+amfi|...",
     )
     parser.add_argument(
         "--allow-missing",
         action="store_true",
-        help="skip optional targets not found (AMFI is still required)",
+        help="skip optional finder targets not found (AMFI still required)",
+    )
+    parser.add_argument(
+        "--ios26-force",
+        action="store_true",
+        help="apply iOS 26 byte table even if old bytes mismatch",
     )
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
 
-    wanted = parse_kpf_set(args.kpf_set)
-    kpf = load_kpf()
-    pf = kpf.KernelPatchfinder(args.input.read_bytes(), verbose=not args.quiet)
-    results = pf.find_all()
+    raw = args.input.read_bytes()
+    kpf_set = args.kpf_set.strip().lower()
 
-    missing = sorted(key for key in wanted if key not in results)
-    hard_missing = [k for k in missing if k in REQUIRED_ALWAYS or not args.allow_missing]
-    soft_missing = [k for k in missing if k not in hard_missing]
-    if hard_missing:
-        raise SystemExit(f"kernel patchfinder did not locate: {', '.join(hard_missing)}")
-    if soft_missing:
-        print(f"note: skipping missing optional targets: {', '.join(soft_missing)}")
-        wanted -= set(soft_missing)
+    if kpf_set in ("ios26-bytes", "26-bytes", "ios26_bytes"):
+        print("kernel path: legacy iOS 26 byte patches (build-specific)")
+        out = apply_ios26_bytes(raw, force=args.ios26_force)
+    else:
+        # ios17 / ios18 / ios26 / debugger+amfi / ios27 / explicit sets → finder
+        if kpf_set in ("ios17", "ios18", "ios26", "26", "debugger+amfi", "amfi+debugger") or kpf_set.startswith(
+            "ios18"
+        ):
+            print("kernel path: Leeksov patchfinder (AMFI + debugger)")
+        wanted = parse_kpf_set("ios18" if kpf_set in ("26",) else kpf_set)
+        out = apply_ios18_finder(
+            raw, wanted, quiet=args.quiet, allow_missing=args.allow_missing
+        )
 
-    if "AMFIIsCDHashInTrustCache" not in results:
-        raise SystemExit("AMFIIsCDHashInTrustCache not found — cannot patch for SSH")
-
-    # Always ensure AMFI is applied when present
-    wanted.add("AMFIIsCDHashInTrustCache")
-
-    count = apply_subset(pf, results, wanted)
-    args.output.write_bytes(bytes(pf.data))
-    print(f"applied {count} instructions for set {{{', '.join(sorted(wanted))}}}")
+    args.output.write_bytes(out)
     print(f"wrote {args.output}")
 
 

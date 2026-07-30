@@ -11,7 +11,8 @@
 #   ./boot.sh --with-fw
 #   ./boot.sh --no-logo       # bgcolor only (safest if screen went blank)
 #   ./boot.sh --logo          # force signed logo.img4 setpicture
-#   ./boot.sh --sep
+#   ./boot.sh --sep           # force RestoreSEP (rsepfirmware)
+#   ./boot.sh --no-sep        # skip RestoreSEP even if staged
 #   BOOTCHAIN_NAME=... ./boot.sh
 
 set -euo pipefail
@@ -23,7 +24,16 @@ source "$ROOT/scripts/devices.sh"
 
 IRECOVERY="$NR_TOOLS/irecovery"
 USBLITER8_BOOT="$NR_TOOLS/usbliter8_boot"
-LOGO_IMG4="${LOGO_IMG4:-$NR_RESOURCES/logo.img4}"
+# Prefer full usbliter8ctl (same binary as usbliter8ra1n / xr-ramdisk exploit.sh).
+USBLITER8CTL="${USBLITER8CTL:-}"
+if [[ -z "$USBLITER8CTL" ]]; then
+    for cand in \
+        "$ROOT/../usbliter8ra1n/tools/usbliter8ctl" \
+        "$ROOT/../usbliter8-xr-ramdisk/tools/usbliter8ctl" \
+        "$NR_TOOLS/usbliter8ctl"; do
+        [[ -f "$cand" ]] && USBLITER8CTL="$cand" && break
+    done
+fi
 LOGO_HOLD_SECS="${LOGO_HOLD_SECS:-3}"
 # Normal USB often needs longer than DCSD for DFU→Recovery reenumeration.
 RECOVERY_WAIT_SECS="${RECOVERY_WAIT_SECS:-120}"
@@ -32,10 +42,12 @@ IRECV_UPLOAD_TIMEOUT_SECS="${IRECV_UPLOAD_TIMEOUT_SECS:-300}"
 
 # Full verbose args (set via setenvnp immediately before bootx).
 # Same family as usbliter8-xr-ramdisk/exploit.sh — required for on-screen -v.
-BOOTARGS="${BOOTARGS:-rd=md0 -v debug=0x2014e serial=3 wdt=-1}"
+# debug=0x14e: DB_PRT|NMI|KPRT|ARP — panic text to serial (SEP Panic / :skg).
+BOOTARGS="${BOOTARGS:-rd=md0 -v debug=0x14e serial=3 wdt=-1 keepsyms=1}"
 
 WITH_FW=-1
-SEP=0
+# -1 = auto (load RestoreSEP when bootchain has sep-firmware.img4)
+SEP=-1
 # Default: try signed logo. Use --no-logo if the panel went blank before.
 USE_LOGO=1
 while (($#)); do
@@ -45,6 +57,7 @@ while (($#)); do
         --no-logo) USE_LOGO=0; shift ;;
         --logo) USE_LOGO=1; shift ;;
         --sep) SEP=1; shift ;;
+        --no-sep) SEP=0; shift ;;
         -h|--help)
             sed -n '2,20p' "$0"
             exit 0
@@ -60,6 +73,15 @@ done
     echo "missing bootchain. Run ./build.sh first, or set BOOTCHAIN_NAME=..." >&2
     exit 1
 }
+
+# Prefer logo baked into this bootchain at build time; else resources/ fallback.
+if [[ -z "${LOGO_IMG4:-}" ]]; then
+    if [[ -s "$BOOTCHAIN/logo.img4" ]]; then
+        LOGO_IMG4="$BOOTCHAIN/logo.img4"
+    else
+        LOGO_IMG4="$NR_RESOURCES/logo.img4"
+    fi
+fi
 
 [[ -x "$IRECOVERY" && -x "$USBLITER8_BOOT" ]] || {
     echo "missing tools under $NR_TOOLS" >&2
@@ -168,38 +190,76 @@ wait_recovery() {
     return 1
 }
 
-# Build a fullscreen black + centered ICH mark for THIS device's panel, then setpicture.
+# Match usbliter8-xr-ramdisk/exploit.sh: ctl boot can hang after jump; poll Recovery.
+boot_via_usbliter8ctl() {
+    local image="$1"
+    local tmp logpid
+    tmp="$(mktemp -t usbliter8ctl-boot.XXXXXX)"
+    echo "  usbliter8ctl boot $(basename "$image")"
+    python3 "$USBLITER8CTL" boot "$image" >"$tmp" 2>&1 &
+    logpid=$!
+    for _ in $(seq 1 25); do
+        if ! kill -0 "$logpid" 2>/dev/null; then
+            wait "$logpid" || true
+            cat "$tmp"
+            rm -f "$tmp"
+            return 0
+        fi
+        if irecv_mode | grep -q 'Recovery'; then
+            kill "$logpid" 2>/dev/null || true
+            wait "$logpid" 2>/dev/null || true
+            cat "$tmp"
+            rm -f "$tmp"
+            echo "  device entered Recovery during ctl boot"
+            return 0
+        fi
+        sleep 1
+    done
+    cat "$tmp"
+    rm -f "$tmp"
+    kill "$logpid" 2>/dev/null || true
+    wait "$logpid" 2>/dev/null || true
+    echo "warning: usbliter8ctl boot did not exit; continuing" >&2
+}
+
+# Prefer bootchain/logo.img4 from build; else rebuild for connected panel, then setpicture.
 show_ich_logo_signed() {
-    local mode board cpid w h
+    local mode board cpid w h logo
     mode="$(irecv_mode)"
     [[ "$mode" == "Recovery" ]] || {
         echo "warning: not Recovery — skip logo" >&2
         return 1
     }
 
-    board="$(irecv_field MODEL)"
-    cpid="$(irecv_field CPID)"
-    board="${board:-unknown}"
-    cpid="${cpid:-0x8020}"
-    read -r w h <<<"$(nr_panel_for_board "$board")"
-    if nr_panel_for_board "$board" >/dev/null 2>&1; then
-        echo "Logo: $board → panel ${w}x${h} (centered for this device)"
+    logo="$LOGO_IMG4"
+    if [[ -s "$BOOTCHAIN/logo.img4" ]]; then
+        logo="$BOOTCHAIN/logo.img4"
+        echo "Logo: using bootchain logo.img4 ($(wc -c <"$logo") bytes)"
     else
-        echo "warning: unknown board $board — fallback ${w}x${h} (still centered)" >&2
+        board="$(irecv_field MODEL)"
+        cpid="$(irecv_field CPID)"
+        board="${board:-unknown}"
+        cpid="${cpid:-0x8020}"
+        read -r w h <<<"$(nr_panel_for_board "$board")"
+        if nr_panel_for_board "$board" >/dev/null 2>&1; then
+            echo "Logo: $board → panel ${w}x${h} (rebuild; no bootchain logo.img4)"
+        else
+            echo "warning: unknown board $board — fallback ${w}x${h}" >&2
+        fi
+        if ! NR_CPID="$cpid" "$ROOT/scripts/make_logo.sh" "$board" --out "$BOOTCHAIN/logo.img4"; then
+            echo "error: could not build logo for $board (${w}x${h})" >&2
+            return 1
+        fi
+        logo="$BOOTCHAIN/logo.img4"
     fi
-
-    if ! NR_CPID="$cpid" "$ROOT/scripts/make_logo.sh" "$board"; then
-        echo "error: could not build logo for $board (${w}x${h})" >&2
-        return 1
-    fi
-    [[ -s "$LOGO_IMG4" ]] || {
-        echo "warning: missing $LOGO_IMG4 after make_logo" >&2
+    [[ -s "$logo" ]] || {
+        echo "warning: missing logo.img4" >&2
         return 1
     }
 
     echo "Setting ICH logo (signed IMG4 + setpicture)..."
-    echo "  file: $LOGO_IMG4 ($(wc -c <"$LOGO_IMG4") bytes)"
-    if ! irecv -f "$LOGO_IMG4"; then
+    echo "  file: $logo ($(wc -c <"$logo") bytes)"
+    if ! irecv -f "$logo"; then
         echo "error: irecovery -f logo.img4 failed" >&2
         return 1
     fi
@@ -239,18 +299,31 @@ MODE="$(awk -F': ' '$1 == "MODE" { print $2; exit }' <<<"$DEVICE_INFO")"
 sleep 2
 
 if [[ -f "$BOOTCHAIN/iBSS.patched.bin" && -f "$BOOTCHAIN/use-ibss" ]]; then
-    echo "Loading iBSS..."
-    "$USBLITER8_BOOT" "$BOOTCHAIN/iBSS.patched.bin"
-    sleep 5
+    # usbliter8ra1n / spironolactone Option B:
+    #   ctl boot iBSS → irecovery iBEC → go → Recovery payloads
+    echo "Loading iBSS → iBEC (Option B; usbliter8ctl)..."
+    if [[ -n "${USBLITER8CTL:-}" && -f "$USBLITER8CTL" ]]; then
+        python3 "$USBLITER8CTL" boot "$BOOTCHAIN/iBSS.patched.bin" || true
+    else
+        "$USBLITER8_BOOT" "$BOOTCHAIN/iBSS.patched.bin"
+    fi
+    sleep 4
     echo "Loading iBEC..."
-    # iBSS path: device should already be Recovery-capable; use timed irecovery.
-    irecv -f "$BOOTCHAIN/iBoot.patched.bin"
-    irecv -c go
+    if [[ -f "$BOOTCHAIN/iBEC.patched.img4" ]]; then
+        irecv -f "$BOOTCHAIN/iBEC.patched.img4"
+    else
+        irecv -f "$BOOTCHAIN/iBoot.patched.bin"
+    fi
+    irecv -c go || true
     sleep 3
     wait_recovery
 else
     echo "Loading iBEC (direct, no iBSS)..."
-    "$USBLITER8_BOOT" "$BOOTCHAIN/iBoot.patched.bin"
+    if [[ -n "${USBLITER8CTL:-}" && -f "$USBLITER8CTL" ]]; then
+        boot_via_usbliter8ctl "$BOOTCHAIN/iBoot.patched.bin"
+    else
+        "$USBLITER8_BOOT" "$BOOTCHAIN/iBoot.patched.bin"
+    fi
     echo "  Boot triggered — waiting for normal USB Recovery (not just DCSD serial)…"
     sleep 5
     wait_recovery
@@ -279,19 +352,29 @@ if [[ -f "$BOOTCHAIN/txm.img4" ]]; then
     irecv -c firmware
 fi
 
+if ((SEP < 0)); then
+    if [[ -f "$BOOTCHAIN/sep-firmware.img4" ]]; then
+        SEP=1
+    else
+        SEP=0
+    fi
+fi
 if ((SEP)); then
     [[ -f "$BOOTCHAIN/sep-firmware.img4" ]] || {
-        echo "missing sep-firmware.img4 (rebuild with ./build.sh --live-data)" >&2
+        echo "missing sep-firmware.img4 (rebuild — RestoreSEP is staged by default)" >&2
         exit 1
     }
-    echo "Loading RestoreSEP..."
+    echo "Loading RestoreSEP (rsepfirmware)..."
     irecv -f "$BOOTCHAIN/sep-firmware.img4"
-    irecv -c sepfirmware
+    # RestoreSEP must be loaded with rsepfirmware (not sepfirmware) so
+    # AppleSEPManager can see the rsepfirmware DT property / Ready path.
+    irecv -c rsepfirmware
 fi
 
-# Load coprocessor firmwares before DT (needed on many boards for host USB / SSH).
-if ((WITH_FW)); then
-    for fw in AOP ANE AVE ISP GFX SIO; do
+# Direct iBEC / exploit.sh: firmwares before DT. Option B (use-ibss): after ramdisk.
+if ((WITH_FW)) && [[ ! -f "$BOOTCHAIN/use-ibss" ]]; then
+    # PMP first when present (A13). A12 chains simply skip missing PMP.img4.
+    for fw in PMP AOP ANE AVE ISP GFX SIO; do
         if [[ -f "$BOOTCHAIN/$fw.img4" ]]; then
             echo "Loading $fw..."
             irecv -f "$BOOTCHAIN/$fw.img4"
@@ -304,6 +387,7 @@ echo "Loading DeviceTree..."
 irecv -f "$BOOTCHAIN/devicetree.img4"
 irecv -c devicetree
 
+# Option B / spiro.sh: trustcache → ramdisk → [fw] → kernel/bootx
 echo "Loading trustcache..."
 irecv -f "$BOOTCHAIN/trustcache.img4"
 irecv -c firmware
@@ -312,6 +396,16 @@ echo "Loading ramdisk..."
 irecv -f "$BOOTCHAIN/ramdisk.img4"
 sleep 2
 irecv -c ramdisk
+
+if ((WITH_FW)) && [[ -f "$BOOTCHAIN/use-ibss" ]]; then
+    for fw in PMP AOP ANE AVE ISP GFX SIO; do
+        if [[ -f "$BOOTCHAIN/$fw.img4" ]]; then
+            echo "Loading $fw..."
+            irecv -f "$BOOTCHAIN/$fw.img4"
+            irecv -c firmware
+        fi
+    done
+fi
 
 echo "Loading kernel..."
 irecv -f "$BOOTCHAIN/kernelcache.img4"
@@ -330,5 +424,6 @@ echo
 echo "Expect: teal (and ICH logo if setpicture worked), then verbose text on LCD."
 echo "DCSD serial is optional (serial=3); normal USB is enough for SSH."
 echo "If the screen stayed blank last time, try:  ./boot.sh --no-logo"
-echo "SSH when up:  ./ssh.sh   (password: alpine)"
+echo "SSH when up:  iproxy 2222 22 → ssh root@localhost -p 2222  (alpine)"
+echo "              then: mount_ich   # mounts all filesystems"
 nr_footer

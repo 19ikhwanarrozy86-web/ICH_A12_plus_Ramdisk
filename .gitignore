@@ -7,7 +7,9 @@ resources/ich_logo_fullscreen.png
 resources/ich_boot_preview.png
 resources/logo_cache/
 resources/ssh.tar.gz.bak.sshrd
+resources/ssh.tar.gz.bak.before_mount_ich
 resources/restored_external.stock
+compile/stage_sshtar/
 .last_bootchain
 *.ipsw
 .DS_Store

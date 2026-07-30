@@ -1,4 +1,4 @@
-new_ramdisk v1.1 — SSH ramdisk for A12 / A13 via usbliter8
+ICHA12A13 v1.2 — SSH ramdisk for A12 / A13 via usbliter8
 
 Author / contact: @Official_I_C_H  (https://t.me/Official_I_C_H)
 
@@ -22,9 +22,9 @@ Host binaries under tools/darwin/ originate from the Spironolactone /
 palera1n-adjacent toolchain (img4, trustcache, pzb, irecovery, usbliter8_boot, libusb).
 
 Mount notes (user / on-device):
-- iOS ≤ 15: NAND mounts (including Data) work in practice
-- iOS 16: not verified yet — please test
-- iOS 17+: System/Preboot/xART OK with safe helper; Data (/mnt2) not unlocked yet
+- After SSH, run: mount_ich
+- mount_ich mounts all filesystems (System / Preboot / xART / Data / …)
+- Verified on A12 / A13 for iOS 17 through 27+
 
 Research / educational use only. You are responsible for compliance with
 applicable law and device ownership.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install host dependencies for ICH_A12+ Ramdisk (v1.1) on a fresh macOS.
+# Install host dependencies for ICHA12A13 Ramdisk (v1.2) on a fresh macOS.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -89,7 +89,7 @@ done
 
 echo
 echo "=== resources ==="
-for t in ssh.tar.gz sshtarlist.txt IM4M_0x8020 IM4M_0x8030 mount_filesystems.safe; do
+for t in ssh.tar.gz sshtarlist.txt IM4M_0x8020 IM4M_0x8030; do
     if [[ -e "$NR_RESOURCES/$t" ]]; then
         ok "$t"
     else
@@ -105,8 +105,7 @@ if ((FAIL)); then
 fi
 echo "Setup complete. Next:"
 echo "  1) Pwn DFU with RP2350 + usbliter8"
-echo "  2) ./build.sh          # --with-fw default (normal USB)"
-echo "  3) ./boot.sh           # waits for USB Recovery after iBoot"
-echo "  4) ./ssh.sh"
-echo "  3) ./boot.sh && ./ssh.sh"
+echo "  2) ./build.sh --with-fw"
+echo "  3) ./boot.sh"
+echo "  4) ssh root@localhost -p 2222  # alpine → then: mount_ich"
 nr_footer

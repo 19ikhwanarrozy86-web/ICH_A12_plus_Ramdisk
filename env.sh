@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Shared paths for the self-contained new_ramdisk project.
+# Shared paths for ICHA12A13 (A12/A13 SSH ramdisk).
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export NEW_RAMDISK_ROOT="$ROOT"
-export NR_VERSION="v1.1"
+export NR_VERSION="v1.2-ICHA12A13"
 export NR_AUTHOR="@Official_I_C_H"
 export NR_TELEGRAM="https://t.me/Official_I_C_H"
 export NR_TOOLS="$ROOT/tools/darwin"

@@ -6,9 +6,8 @@
 nr_expand_inject_ramdisk() {
     local stock_dmg="$1"
     local ssh_tar="$2"
-    local mounts_safe="${3:-}"
-    local mount_pt="${4:-/tmp/NewRamdiskRD}"
-    local gtar_bin="${5:-gtar}"
+    local mount_pt="${3:-/tmp/NewRamdiskRD}"
+    local gtar_bin="${4:-gtar}"
 
     [[ -s "$stock_dmg" ]] || {
         echo "ramdisk expand: missing $stock_dmg" >&2
@@ -48,14 +47,12 @@ nr_expand_inject_ramdisk() {
     _nr_inject_at() {
         local mp="$1"
         "$gtar_bin" -x --no-overwrite-dir -f "$ssh_tar" -C "$mp/"
-        if [[ -n "$mounts_safe" && -f "$mounts_safe" ]]; then
-            if [[ -f "$mp/usr/bin/mount_filesystems" ]]; then
-                cp "$mp/usr/bin/mount_filesystems" \
-                    "$mp/usr/bin/mount_filesystems.stock.panic" 2>/dev/null || true
-            fi
-            cp "$mounts_safe" "$mp/usr/bin/mount_filesystems"
-            chmod 755 "$mp/usr/bin/mount_filesystems"
-            echo "installed safe mount_filesystems (no seputil --load)"
+        # mount_ich binary comes from ssh.tar.gz (compile/ → pack.sh).
+        if [[ -f "$mp/usr/bin/mount_ich" ]]; then
+            chmod 755 "$mp/usr/bin/mount_ich"
+            echo "using /usr/bin/mount_ich from ssh.tar.gz (binary)"
+        else
+            echo "warning: usr/bin/mount_ich missing from ssh.tar.gz — run ./compile/build.sh && ./compile/pack.sh" >&2
         fi
     }
 

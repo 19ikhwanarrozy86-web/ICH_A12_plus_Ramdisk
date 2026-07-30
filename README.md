@@ -1,12 +1,13 @@
-# ICH_A12+ Ramdisk `v1.1`
+# ICHA12A13 `v1.2`
 
-SSH ramdisk for **A12 / A13** after pwned DFU with [usbliter8](https://github.com/prdgmshift/usbliter8).
+SSH ramdisk for **Apple A12 / A13** after pwned DFU with [usbliter8](https://github.com/prdgmshift/usbliter8).
 
 Made by **[@Official_I_C_H](https://t.me/Official_I_C_H)** · [t.me/Official_I_C_H](https://t.me/Official_I_C_H)
 
 Not a jailbreak. Research use on devices you own.
 
 If this helps you, please ⭐ **star the repo** — thanks.
+
 ## ☕ Buy Me a Coffee
 
 If this project helped you, please consider supporting its development.
@@ -20,9 +21,22 @@ If this project helped you, please consider supporting its development.
 
 Every contribution helps maintain and improve this project. Thank you! ❤️
 
+## What’s new in v1.2
+
+- **Automatic kernel patch path by iOS major** (A12 / A13)
+- On-device **`mount_ich`** — mounts **all** filesystems over SSH (iOS **17 → 27+**)
+
+| iOS | Kernel patches |
+|-----|----------------|
+| **17 / 18** | Proven finder (`PE_i_can_has_debugger` + `AMFIIsCDHashInTrustCache`) |
+| **26** | Fixed byte-offset table (`patch/ios26_kernel_byte_patches.py`) |
+| **27+** | Finder + launch constraints (TXM-era) |
+
+iBoot (XR `n841ap` / XS `d321ap` wrappers) is unchanged from the working tree.
+
 ## Enter pwned DFU
 
-1. DFU mode + **RP2350** + [usbliter8](https://github.com/prdgmshift/usbliter8)  
+1. DFU + **RP2350** + [usbliter8](https://github.com/prdgmshift/usbliter8)  
 2. Cable to Mac (prefer **USB-A → Lightning**; USB-C adapters are flaky)  
 3. Confirm:
 
@@ -35,137 +49,55 @@ DCSD/serial cables are fine for verbose UART, but **normal USB must reappear as 
 
 ## Setup
 
-macOS only. One-shot:
-
 ```bash
 ./setup.sh
-```
-
-Or install dependencies yourself:
-
-**1. Homebrew** (if missing)
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-**2. System packages**
-
-```bash
-brew install python@3 curl
-brew install blacktop/tap/ipsw
-# optional fallback for iproxy:
-# brew install libimobiledevice
-```
-
-**3. Python packages**
-
-```bash
-pip3 install -r requirements.txt
-```
-
-| Package | Used for |
-|---------|----------|
-| `pyimg4` | IMG4 pack / unpack |
-| `capstone` | iBoot / kernel patch finders |
-| `Pillow` | logo generation |
-
-**4. Already in the repo** (`tools/darwin/`) — no install needed if the clone is complete:
-
-`irecovery`, `pzb`, `img4`, `gtar`, `trustcache`, `jq`, `usbliter8_boot`, `iproxy`, `sshpass`, `libusb`, etc.
-
-**5. Optional** — host `ldid` only if you rebuild / rebrand `restored_external` yourself:
-
-```bash
-brew install ldid
-```
-
-Check:
-
-```bash
-./status.sh
+# or: brew install python@3 curl blacktop/tap/ipsw && pip3 install -r requirements.txt
 ```
 
 ## Quick start
 
 ```bash
 ./status.sh
-./build.sh                 # --with-fw is default (needed for normal USB)
-./boot.sh
-./ssh.sh
-# password: alpine
+./build.sh --with-fw          # --kpf-set auto (default): 18→finder, 26→byte table
+./boot.sh --with-fw --no-logo
 ```
 
-Works for **A12 / A13** and any signed iOS version listed by `./build.sh --list` (ipsw.me).
-
-`./ssh.sh` mounts System/Preboot/xART and prints the device iOS version from Preboot when available.
-
-Useful flags:
+SSH in, then mount everything:
 
 ```bash
-./build.sh --list
-./build.sh --version 18.7.9
-./build.sh --no-fw          # skip USB firmwares (not recommended)
-./build.sh --kernel stock
-./boot.sh --no-logo
-./boot.sh --no-fw
+iproxy 2222 22
+ssh root@localhost -p 2222    # password: alpine
+mount_ich                     # mounts all filesystems (System / Preboot / xART / Data / …)
 ```
 
-If `./boot.sh` stops after “Boot triggered” / iBoot send: unplug and replug once when prompted, use a USB-A cable, and rebuild without `--no-fw`.
+`mount_ich` is the only mount command you need. It works on **A12 / A13** for **iOS 17 through 27+**.
 
-## Boot
+If `./boot.sh` stops after “Boot triggered” / iBoot send: unplug and replug once when prompted, use a USB-A cable, and rebuild with `--with-fw`.
 
-```
-usbliter8 (RP2350) → PWND DFU
-  → patched iBEC
-  → ICH logo (centered for this device) + verbose boot-args
-  → [SPTM/TXM if in IPSW] → firmwares → DT → trustcache → ramdisk → kernel/bootx
-  → SSH  root@localhost:2222  alpine
-```
+### Force a kernel path
 
-Logo and verbose are handled in `./boot.sh` (panel size from board, `setenvnp` before `bootx`).
-
-## Patches
-
-| Layer | When |
-|-------|------|
-| iBoot | always (`rd=md0`, IMG4 path) |
-| SPTM / TXM | only if BuildManifest has them |
-| Kernel | patched by default (AMFI; more on iOS 27) — `--kernel stock` fallback |
-| Ramdisk / trustcache | stock RestoreRamDisk + SSH inject |
-
-## Mounts
-
-```sh
-mount_filesystems                 # /mnt1 System, /mnt6 Preboot, /mnt7 xART
-mount_filesystems --live-data     # /mnt2 Data
+```bash
+./build.sh --build <BUILD> --with-fw --kpf-set ios18   # finder
+./build.sh --build <BUILD> --with-fw --kpf-set ios26   # byte table
+./build.sh --build <BUILD> --with-fw --kernel stock    # no kernel patches
 ```
 
-| iOS | System / Preboot / xART | `/mnt2` Data |
-|-----|-------------------------|--------------|
-| ≤ 15 | OK | OK in practice |
-| 16 | expected OK | not verified |
-| 17+ | OK (safe helper, no `seputil --load`) | **still not working** |
+If iOS 26 byte offsets do not match your exact kernel build, the build fails closed (safe). Update `patch/ios26_kernel_byte_patches.py` for that build, or pass finder fallback only after verifying.
 
-Everything practical was tried for **`/mnt2` on iOS 17+**; Data stays SEP-gated and is **not solved** here. Contributions welcome if you find a reliable path.
+## Layout
 
-## Devices
+| Path | Role |
+|------|------|
+| `build.sh` / `boot.sh` | Build → boot; SSH + on-device `mount_ich` |
+| `patch/iboot_patchfinder.py` | iBoot IMG4 / CTRR / boot-args |
+| `patch/finalize_iboot.py` | `n841ap` / `d321ap` safe wrappers |
+| `patch/apply_kernel_patches.py` | Routes 18 vs 26 |
+| `patch/ios26_kernel_byte_patches.py` | iOS 26-only offsets |
+| `Darwin/` | kairos / cryptic (optional alternate iBoot tools) |
+| `tools/darwin/` | img4, irecovery, usbliter8_boot, … |
 
-| CPID | Chip | Examples |
-|------|------|----------|
-| 0x8020 | A12 | XR, XS, iPad Air 3… |
-| 0x8030 | A13 | iPhone 11, SE 2… |
-| 0x8027 | A12X | iPad Pro 2018 (`--im4m`) |
+## Notes
 
-## Credits
-
-See [NOTICE](NOTICE).
-
-- [usbliter8](https://github.com/prdgmshift/usbliter8) — Paradigm Shift  
-- [usbliter8ra1n](https://github.com/Leeksov/usbliter8ra1n) — Leeksov  
-- Patchfinders: [iboot](https://github.com/Leeksov/usbliter8-iboot-patchfinder) · [kernel](https://github.com/Leeksov/usbliter8-kernel-patchfinder) · [sptm](https://github.com/Leeksov/usbliter8-sptm-patchfinder) · [txm](https://github.com/Leeksov/usbliter8-txm-patchfinder)  
-- [palera1n](https://github.com/palera1n) / SSHRD ecosystem  
-
-## License
-
-MIT. Upstream licenses apply. **For research on devices you own.**
+- Proven SSH path: **direct iBEC** (no iBSS required).
+- RestoreSEP: `./boot.sh --sep` uses **`rsepfirmware`**.
+- After SSH: run **`mount_ich`** once to mount all NAND filesystems.
