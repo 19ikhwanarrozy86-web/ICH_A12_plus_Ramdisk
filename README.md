@@ -1,103 +1,148 @@
-# ICHA12A13 `v1.2`
+# ICH_A12_plus_Ramdisk `v1.2`
 
-SSH ramdisk for **Apple A12 / A13** after pwned DFU with [usbliter8](https://github.com/prdgmshift/usbliter8).
+> **Apple A12 / A13 SSH Ramdisk Toolkit** for pwned DFU mode via [usbliter8](https://github.com/prdgmshift/usbliter8).
 
-Made by **[@Official_I_C_H](https://t.me/Official_I_C_H)** · [t.me/Official_I_C_H](https://t.me/Official_I_C_H)
+Original Toolkit by **[@Official_I_C_H](https://t.me/Official_I_C_H)** · [t.me/Official_I_C_H](https://t.me/Official_I_C_H)  
+Linux Port & Maintenance by **[20obb](https://github.com/20obb)**  
+Copyright (c) 20obb. All rights reserved.
 
-Not a jailbreak. Research use on devices you own.
+---
 
-If this helps you, please ⭐ **star the repo** — thanks.
+> [!WARNING]
+> **Research Use Only:** This is not a jailbreak. Only use on devices you own for research purposes.
+>
+> ⚠️ **Linux Build Note:** Building bootchain artifacts natively on Linux requires macOS-only tools. If you are using Linux, build your artifacts via **GitHub Actions** (see `.github/workflows/`) or download pre-built artifacts, then place them in `./artifact/` and run `./boot.sh`.
+>
+> ⚠️ **SSH Status:** **SSH is currently UNTESTED on the Linux backend.**
+
+---
 
 ## ☕ Buy Me a Coffee
 
 If this project helped you, please consider supporting its development.
 
 ### USDT (TRC20)
+- **Wallet Address:** `TV3W882uz6n219dDgAntedV9o518Sqk255`
+- **Network:** TRON (TRC20)
 
-**Wallet Address**
-`TV3W882uz6n219dDgAntedV9o518Sqk255`
+Every contribution helps maintain and improve this project! ❤️
 
-**Network:** TRON (TRC20)
+---
 
-Every contribution helps maintain and improve this project. Thank you! ❤️
+## ✨ What’s New in v1.2
 
-## What’s new in v1.2
+- **Linux Backend Support:** Cross-platform Linux boot runtime (`./boot.sh --backend linux` & `./setup-linux.sh`).
+- **Automatic Kernel Patch Routing:** Dynamic patch path based on target iOS major version for A12/A13.
+- **On-Device `mount_ich`:** Automatically mounts **all** APFS filesystems over SSH (iOS **17 → 27+**).
 
-- **Automatic kernel patch path by iOS major** (A12 / A13)
-- On-device **`mount_ich`** — mounts **all** filesystems over SSH (iOS **17 → 27+**)
-
-| iOS | Kernel patches |
-|-----|----------------|
+| iOS Major | Kernel Patch Strategy |
+|-----------|------------------------|
 | **17 / 18** | Proven finder (`PE_i_can_has_debugger` + `AMFIIsCDHashInTrustCache`) |
 | **26** | Fixed byte-offset table (`patch/ios26_kernel_byte_patches.py`) |
 | **27+** | Finder + launch constraints (TXM-era) |
 
-iBoot (XR `n841ap` / XS `d321ap` wrappers) is unchanged from the working tree.
+---
 
-## Enter pwned DFU
+## ⚡ Enter Pwned DFU
 
-1. DFU + **RP2350** + [usbliter8](https://github.com/prdgmshift/usbliter8)  
-2. Cable to Mac (prefer **USB-A → Lightning**; USB-C adapters are flaky)  
-3. Confirm:
+1. Put device into DFU mode + **RP2350** + [usbliter8](https://github.com/prdgmshift/usbliter8).
+2. Connect Lightning cable to your host machine (**Direct USB-A → Lightning** recommended; USB-C adapters can cause USB reset timing issues).
+3. Verify pwned DFU connection:
 
 ```bash
+# macOS
 ./tools/darwin/irecovery -q
-# MODE: DFU   PWND: usbliter8
+
+# Linux
+irecovery -q
+```
+Expected output should confirm `MODE: DFU` and `PWND: usbliter8`.
+
+---
+
+## 🚀 Setup & Quick Start
+
+### 🐧 On Linux
+
+> **Building on Linux:** Build your artifacts via **GitHub Actions**, extract/place them in `./artifact/`, then run:
+
+```bash
+# 1. Install Linux runtime dependencies & udev rules
+./setup-linux.sh --install --install-udev
+
+# 2. Check connected device and artifact status
+./status.sh
+
+# 3. Boot pwned DFU device into Ramdisk
+sudo ./boot.sh --debug --with-fw
 ```
 
-DCSD/serial cables are fine for verbose UART, but **normal USB must reappear as Recovery** after iBoot. `./boot.sh` waits for that USB Recovery mode (and will prompt to unplug/replug if needed).
-
-## Setup
+### 🍎 On macOS
 
 ```bash
+# 1. Install dependencies
 ./setup.sh
 # or: brew install python@3 curl blacktop/tap/ipsw && pip3 install -r requirements.txt
-```
 
-## Quick start
-
-```bash
+# 2. Check status and build artifact locally
 ./status.sh
-./build.sh         # --kpf-set auto (default): 18→finder, 26→byte table
+./build.sh --with-fw
+
+# 3. Boot into Ramdisk
 ./boot.sh
 ```
 
-SSH in, then mount everything:
+---
+
+## 🌐 Connecting & Mounting (SSH)
+
+> ⚠️ **Note:** SSH functionality is currently **UNTESTED** on Linux hosts.
+
+Once booted into Ramdisk:
 
 ```bash
+# Forward SSH port
 iproxy 2222 22
-ssh root@localhost -p 2222    # password: alpine
-mount_ich                     # mounts all filesystems (System / Preboot / xART / Data / …)
+
+# Connect via SSH (Password: alpine)
+ssh root@localhost -p 2222
+
+# Mount all filesystems (System, Preboot, xART, Data, etc.)
+mount_ich
 ```
 
-`mount_ich` is the only mount command you need. It works on **A12 / A13** for **iOS 17 through 27+**.
+`mount_ich` works seamlessly across **A12 & A13** devices running **iOS 17 through 27+**.
 
-If `./boot.sh` stops after “Boot triggered” / iBoot send: unplug and replug once when prompted, use a USB-A cable, and rebuild with `--with-fw`.
+---
 
-### Force a kernel path
+## 🛠️ Advanced Options
+
+### Force a Specific Kernel Patch Path
 
 ```bash
-./build.sh --build <BUILD> --with-fw --kpf-set ios18   # finder
-./build.sh --build <BUILD> --with-fw --kpf-set ios26   # byte table
-./build.sh --build <BUILD> --with-fw --kernel stock    # no kernel patches
+./build.sh --build <BUILD> --with-fw --kpf-set ios18   # Finder
+./build.sh --build <BUILD> --with-fw --kpf-set ios26   # Byte table
+./build.sh --build <BUILD> --with-fw --kernel stock    # Stock kernel (no patches)
 ```
 
-If iOS 26 byte offsets do not match your exact kernel build, the build fails closed (safe). Update `patch/ios26_kernel_byte_patches.py` for that build, or pass finder fallback only after verifying.
+---
 
-## Layout
+## 📂 Repository Layout
 
-| Path | Role |
-|------|------|
-| `build.sh` / `boot.sh` | Build → boot; SSH + on-device `mount_ich` |
-| `patch/iboot_patchfinder.py` | iBoot IMG4 / CTRR / boot-args |
-| `patch/finalize_iboot.py` | `n841ap` / `d321ap` safe wrappers |
-| `patch/apply_kernel_patches.py` | Routes 18 vs 26 |
-| `patch/ios26_kernel_byte_patches.py` | iOS 26-only offsets |
-| `Darwin/` | kairos / cryptic (optional alternate iBoot tools) |
-| `tools/darwin/` | img4, irecovery, usbliter8_boot, … |
+| File / Folder | Description |
+|---------------|-------------|
+| `boot.sh` | Cross-platform boot runtime (Linux & Darwin) |
+| `build.sh` | Artifact builder (macOS / GitHub Actions) |
+| `setup-linux.sh` | Linux dependency setup & udev rule installer |
+| `backends/` | OS-specific boot drivers (`linux.sh`, `darwin.sh`, `common.sh`) |
+| `patch/` | Kernel & iBoot patchfinders |
+| `udev/` | Linux udev rules for Apple DFU/Recovery devices |
+| `tools/` | Platform tool binaries |
 
-## Notes
+---
 
-- Proven SSH path: **direct iBEC** (no iBSS required).
-- RestoreSEP: `./boot.sh --sep` uses **`rsepfirmware`**.
-- After SSH: run **`mount_ich`** once to mount all NAND filesystems.
+## 📜 Copyright & Credits
+
+- **Original Toolkit:** [@Official_I_C_H](https://t.me/Official_I_C_H)
+- **Linux Port & Maintenance:** [20obb](https://github.com/20obb)
+- **Copyright:** © 20obb ([GitHub: @20obb](https://github.com/20obb)). All rights reserved.
