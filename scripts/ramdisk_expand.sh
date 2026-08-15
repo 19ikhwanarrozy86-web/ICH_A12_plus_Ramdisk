@@ -171,3 +171,67 @@ nr_expand_inject_ramdisk() {
     _nr_force_detach_mp "$mount_pt"
     return 0
 }
+
+nr_validate_ramdisk_ssh() {
+    local dmg="$1"
+    local mount_pt="${2:-/tmp/NewRamdiskRDVal}"
+
+    [[ -f "$dmg" ]] || {
+        echo "validation error: missing ramdisk image $dmg" >&2
+        return 1
+    }
+
+    hdiutil detach -force "$mount_pt" >/dev/null 2>&1 || true
+    mkdir -p "$mount_pt"
+
+    if ! hdiutil attach -mountpoint "$mount_pt" -owners off \
+        -imagekey diskimage-class=CRawDiskImage "$dmg" >/dev/null 2>&1 \
+        && ! hdiutil attach -mountpoint "$mount_pt" -owners off "$dmg" >/dev/null 2>&1; then
+        echo "validation error: cannot mount ramdisk image for validation" >&2
+        return 1
+    fi
+
+    local err=0
+
+    # 1. Check restored_external
+    if [[ ! -x "$mount_pt/usr/local/bin/restored_external" ]]; then
+        echo "validation error: /usr/local/bin/restored_external is missing or not executable" >&2
+        err=1
+    fi
+
+    # 2. Check dropbear
+    if [[ ! -x "$mount_pt/usr/local/bin/dropbear" ]]; then
+        echo "validation error: /usr/local/bin/dropbear is missing or not executable" >&2
+        err=1
+    fi
+
+    # 3. Check mount_ich
+    if [[ ! -x "$mount_pt/usr/bin/mount_ich" ]]; then
+        echo "validation error: /usr/bin/mount_ich is missing or not executable" >&2
+        err=1
+    fi
+
+    # 4. Check dropbear host keys and permissions
+    local hostkey
+    for hostkey in "$mount_pt/private/etc/dropbear/"dropbear_*_host_key; do
+        if [[ -f "$hostkey" ]]; then
+            local mode
+            mode="$(stat -f "%Lp" "$hostkey" 2>/dev/null || stat -c "%a" "$hostkey" 2>/dev/null || true)"
+            if [[ "$mode" != "600" ]]; then
+                echo "validation error: $hostkey has unsafe permissions ($mode), expected 600" >&2
+                err=1
+            fi
+        fi
+    done
+
+    hdiutil detach -force "$mount_pt" >/dev/null 2>&1 || true
+
+    if ((err)); then
+        echo "SSH ramdisk validation FAILED!" >&2
+        return 1
+    fi
+
+    echo "SSH ramdisk validation PASSED: restored_external, dropbear, hostkeys (0600), and mount_ich verified."
+    return 0
+}
+

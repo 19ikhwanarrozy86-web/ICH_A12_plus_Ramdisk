@@ -523,11 +523,24 @@ if [[ -f "$NR_RESOURCES/restored_external" ]]; then
     if [[ -d /tmp/NewRamdiskRD/usr/local/bin ]]; then
         cp "$NR_RESOURCES/restored_external" /tmp/NewRamdiskRD/usr/local/bin/restored_external
         chmod 755 /tmp/NewRamdiskRD/usr/local/bin/restored_external
+        if [[ -d /tmp/NewRamdiskRD/usr/libexec ]]; then
+            ln -sf /usr/local/bin/restored_external /tmp/NewRamdiskRD/usr/libexec/restored_external 2>/dev/null || true
+        fi
         echo "installed ICH-branded restored_external (no SSHRD splash)"
     fi
+    # Ensure dropbear host key permissions are 0600
+    for keyfile in /tmp/NewRamdiskRD/private/etc/dropbear/dropbear_*_host_key; do
+        if [[ -f "$keyfile" ]]; then
+            chmod 600 "$keyfile"
+        fi
+    done
     hdiutil detach -force /tmp/NewRamdiskRD >/dev/null 2>&1 || true
 fi
 trap - EXIT
+
+# Validate SSH setup inside ramdisk.dmg
+nr_validate_ramdisk_ssh "$WORK/ramdisk.dmg" /tmp/NewRamdiskRDVal
+
 
 # Trustcache: stock RestoreTrustCache + append injected SSH CDHashes.
 # sshtarlist.txt paths are relative to project root: work/sshtar/...
