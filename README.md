@@ -15,19 +15,7 @@ Copyright (c) 20obb. All rights reserved.
 >
 > ⚠️ **SSH Status:** **SSH is currently UNTESTED on the Linux backend.**
 
----
 
-## ☕ Buy Me a Coffee
-
-If this project helped you, please consider supporting its development.
-
-### USDT (TRC20)
-- **Wallet Address:** `TV3W882uz6n219dDgAntedV9o518Sqk255`
-- **Network:** TRON (TRC20)
-
-Every contribution helps maintain and improve this project! ❤️
-
----
 
 ## ✨ What’s New in v1.2
 
