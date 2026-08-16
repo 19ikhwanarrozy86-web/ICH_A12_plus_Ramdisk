@@ -331,4 +331,54 @@ if ((WITH_FW)) && [[ -f "$BOOTCHAIN/use-ibss" ]]; then send_firmware_set; fi
 backend_send_file "$BOOTCHAIN/kernelcache.img4"
 backend_send_command "setenvnp boot-args $BOOTARGS" || backend_send_command "setenv boot-args $BOOTARGS" || printf 'warning: boot-args command failed\n' >&2
 backend_send_command bootx
-printf 'Boot triggered. Connect SSH when the ramdisk finishes booting.\n'
+
+wait_for_ramdisk_ssh() {
+    local max_wait="${RAMDISK_BOOT_WAIT_SECS:-45}"
+    printf '\n[*] Boot command sent (bootx). Waiting for ramdisk kernel & USB Mux to start (up to %ss)...\n' "$max_wait"
+    
+    # 1. Wait for Recovery device (05ac:1281) to disconnect as kernel takes over
+    local i
+    for i in $(seq 1 15); do
+        if type -t backend_usb_apple_present &>/dev/null; then
+            if ! backend_usb_apple_present "1281"; then
+                printf '  Recovery device disconnected (kernel booting)...\n'
+                break
+            fi
+        fi
+        sleep 1
+    done
+    
+    # 2. Wait for Ramdisk USB Mux device (05ac:12a8 / Apple USB) to appear
+    local detected=0
+    for i in $(seq 1 "$max_wait"); do
+        if type -t backend_usb_apple_present &>/dev/null; then
+            if backend_usb_apple_present "12a8" || backend_usb_apple_present "12aa" || backend_usb_apple_present "12ab"; then
+                printf '  Ramdisk USB interface detected in kernel (after %ss)\n' "$i"
+                detected=1
+                break
+            fi
+        fi
+        ((i % 5 == 0)) && printf '  Waiting for ramdisk USB interface... (%ss/%ss)\n' "$i" "$max_wait"
+        sleep 1
+    done
+    
+    if type -t backend_usb_settle &>/dev/null; then
+        backend_usb_settle 3
+    fi
+    
+    printf '\n============================================================\n'
+    printf '  ICH_A12+ Ramdisk is booted!\n'
+    printf '============================================================\n'
+    printf 'To connect to SSH:\n'
+    printf '  Option A: Use the helper script:\n'
+    printf '     ./ssh.sh\n\n'
+    printf '  Option B: Manual commands:\n'
+    printf '     1. iproxy 2222 22\n'
+    printf '     2. ssh root@127.0.0.1 -p 2222  (Password: alpine)\n\n'
+    printf 'After login, mount all partitions with:\n'
+    printf '     mount_ich\n'
+    printf '============================================================\n\n'
+}
+
+wait_for_ramdisk_ssh
+

@@ -19,4 +19,8 @@ __pycache__/
 venv/
 *.raw
 *.dmg
+artifact/
+*.log
+iphone11-a13-ramdisk.tar.gz
 !resources/
+!resources/ssh.tar.gz
