@@ -16,10 +16,19 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$NR_
 # shellcheck source=scripts/banner.sh
 source "$ROOT/scripts/banner.sh"
 
+export NR_ARTIFACT_ROOT="${ICH_RAMDISK_ARTIFACT:-$ROOT/artifact}"
+
 # Latest successful bootchain name is written here after build.
 export NR_LAST_BOOTCHAIN_FILE="$ROOT/.last_bootchain"
 if [[ -z "${BOOTCHAIN_NAME:-}" && -f "$NR_LAST_BOOTCHAIN_FILE" ]]; then
     BOOTCHAIN_NAME="$(<"$NR_LAST_BOOTCHAIN_FILE")"
 fi
 export BOOTCHAIN_NAME="${BOOTCHAIN_NAME:-}"
-export BOOTCHAIN="${BOOTCHAIN_NAME:+$NR_BOOTCHAIN_ROOT/$BOOTCHAIN_NAME}"
+
+if [[ -n "${BOOTCHAIN_PATH:-}" ]]; then
+    export BOOTCHAIN="$BOOTCHAIN_PATH"
+elif [[ -d "$NR_ARTIFACT_ROOT/bootchain" ]]; then
+    export BOOTCHAIN="$NR_ARTIFACT_ROOT/bootchain"
+else
+    export BOOTCHAIN="${BOOTCHAIN_NAME:+$NR_BOOTCHAIN_ROOT/$BOOTCHAIN_NAME}"
+fi
