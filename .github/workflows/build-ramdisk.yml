@@ -1,8 +1,20 @@
-name: Build iPhone 11 A13 Ramdisk
+name: Build A12/A13 iPhone Ramdisk
 
 on:
   workflow_dispatch:
     inputs:
+      device:
+        description: 'Target device'
+        required: true
+        default: 'iPhone 11'
+        type: choice
+        options:
+          - iPhone XS
+          - iPhone XS Max
+          - iPhone XR
+          - iPhone 11
+          - iPhone 11 Pro
+          - iPhone 11 Pro Max
       ios_version:
         description: 'iOS version or Build ID (e.g. 26.5.2 or 23F84)'
         required: true
@@ -29,6 +41,55 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Resolve device identity
+        # Single source of truth for device → (ProductType, BoardConfig, CPID) so
+        # every later step (irecovery shim, ipsw --device, BUILD-INFO.txt, artifact
+        # name) stays in sync automatically instead of re-hardcoding iPhone 11 in
+        # five different places. CPIDs/BoardConfigs cross-checked against
+        # theapplewiki.com / ipsw.me. iPhone XS Max defaults to the global
+        # iPhone11,6/D331pAP identity; swap in iPhone11,4/D331AP below if you
+        # specifically need the mainland-China dual-SIM variant.
+        run: |
+          set -e
+          case "${{ github.event.inputs.device }}" in
+            "iPhone XS")
+              DEVICE_PRODUCT="iPhone11,2"; DEVICE_BOARD="D321AP"
+              DEVICE_CPID="0x8020"; DEVICE_CHIP="A12 / T8020"; DEVICE_SLUG="iphone-xs" ;;
+            "iPhone XS Max")
+              DEVICE_PRODUCT="iPhone11,6"; DEVICE_BOARD="D331pAP"
+              DEVICE_CPID="0x8020"; DEVICE_CHIP="A12 / T8020"; DEVICE_SLUG="iphone-xs-max" ;;
+            "iPhone XR")
+              DEVICE_PRODUCT="iPhone11,8"; DEVICE_BOARD="N841AP"
+              DEVICE_CPID="0x8020"; DEVICE_CHIP="A12 / T8020"; DEVICE_SLUG="iphone-xr" ;;
+            "iPhone 11")
+              DEVICE_PRODUCT="iPhone12,1"; DEVICE_BOARD="N104AP"
+              DEVICE_CPID="0x8030"; DEVICE_CHIP="A13 / T8030"; DEVICE_SLUG="iphone-11" ;;
+            "iPhone 11 Pro")
+              DEVICE_PRODUCT="iPhone12,3"; DEVICE_BOARD="D421AP"
+              DEVICE_CPID="0x8030"; DEVICE_CHIP="A13 / T8030"; DEVICE_SLUG="iphone-11-pro" ;;
+            "iPhone 11 Pro Max")
+              DEVICE_PRODUCT="iPhone12,5"; DEVICE_BOARD="D431AP"
+              DEVICE_CPID="0x8030"; DEVICE_CHIP="A13 / T8030"; DEVICE_SLUG="iphone-11-pro-max" ;;
+            *)
+              echo "ERROR: unknown device '${{ github.event.inputs.device }}'" >&2
+              exit 1 ;;
+          esac
+          DEVICE_NAME="${{ github.event.inputs.device }}"
+          {
+            echo "DEVICE_PRODUCT=$DEVICE_PRODUCT"
+            echo "DEVICE_BOARD=$DEVICE_BOARD"
+            echo "DEVICE_CPID=$DEVICE_CPID"
+            echo "DEVICE_CHIP=$DEVICE_CHIP"
+            echo "DEVICE_SLUG=$DEVICE_SLUG"
+            echo "DEVICE_NAME=$DEVICE_NAME"
+          } >> "$GITHUB_ENV"
+          echo "=== Resolved device ==="
+          echo "Name:    $DEVICE_NAME"
+          echo "Product: $DEVICE_PRODUCT"
+          echo "Board:   $DEVICE_BOARD"
+          echo "CPID:    $DEVICE_CPID"
+          echo "Chip:    $DEVICE_CHIP"
 
       - name: Show environment
         run: |
@@ -70,8 +131,8 @@ jobs:
             [[ -f "$f" ]] || { echo "MISS: $f" >&2; exit 1; }
             echo "OK: $f"
           done
-          for r in resources/IM4M_0x8030 resources/ssh.tar.gz resources/sshtarlist.txt; do
-            [[ -f "$r" ]] || { echo "MISS: $r" >&2; exit 1; }
+          for r in "resources/IM4M_${DEVICE_CPID}" resources/ssh.tar.gz resources/sshtarlist.txt; do
+            [[ -f "$r" ]] || { echo "MISS: $r (needed for $DEVICE_NAME / $DEVICE_CPID)" >&2; exit 1; }
             echo "OK: $r"
           done
           chmod +x tools/darwin/*
@@ -137,20 +198,20 @@ jobs:
           # build.sh uses $NR_TOOLS/irecovery (absolute path), not PATH.
           # We must replace the actual binary temporarily.
           mv tools/darwin/irecovery tools/darwin/irecovery.stock
-          cat > tools/darwin/irecovery << 'SHIM'
+          cat > tools/darwin/irecovery << SHIM
           #!/bin/bash
-          if [[ "$1" == "-q" ]]; then
+          if [[ "\$1" == "-q" ]]; then
             cat << 'INNER'
-          PRODUCT: iPhone12,1
-          MODEL: N104AP
-          CPID: 0x8030
+          PRODUCT: $DEVICE_PRODUCT
+          MODEL: $DEVICE_BOARD
+          CPID: $DEVICE_CPID
           MODE: DFU
           PWND: usbliter8
           ECID: 0000000000000000
-          NAME: iPhone 11
+          NAME: $DEVICE_NAME
           INNER
           else
-            echo "irecovery shim: unsupported args: $@" >&2
+            echo "irecovery shim: unsupported args: \$@" >&2
             exit 1
           fi
           SHIM
@@ -168,7 +229,7 @@ jobs:
           mkdir -p /tmp/bm_debug
           cd /tmp/bm_debug
           echo "=== Downloading BuildManifest via ipsw CLI ==="
-          ipsw download ipsw --device iPhone12,1 --build "${{ github.event.inputs.ios_version }}" --build-manifest --output .
+          ipsw download ipsw --device "$DEVICE_PRODUCT" --build "${{ github.event.inputs.ios_version }}" --build-manifest --output .
           if [[ -f BuildManifest.plist ]]; then
             python3 << 'PY'
           import plistlib
@@ -206,7 +267,7 @@ jobs:
           fi
           
           echo "=== SELECTED BUILD IDENTITY ==="
-          echo "Device: iPhone 11 (iPhone12,1 / N104AP / 0x8030)"
+          echo "Device: $DEVICE_NAME ($DEVICE_PRODUCT / $DEVICE_BOARD / $DEVICE_CPID)"
           echo "Build:  ${{ github.event.inputs.ios_version }}"
           echo "Kernel: ${{ github.event.inputs.kernel }}"
           echo "With-FW: ${{ github.event.inputs.with_fw }}"
@@ -239,11 +300,11 @@ jobs:
           cp -R "$BOOTCHAIN_DIR"/* artifact/bootchain/
           
           cat > artifact/BUILD-INFO.txt << EOF
-          Device: iPhone 11
-          ProductType: iPhone12,1
-          BoardConfig: N104AP
-          CPID: 0x8030
-          Chip: A13 / T8030
+          Device: $DEVICE_NAME
+          ProductType: $DEVICE_PRODUCT
+          BoardConfig: $DEVICE_BOARD
+          CPID: $DEVICE_CPID
+          Chip: $DEVICE_CHIP
           Build: ${{ github.event.inputs.ios_version }}
           Kernel: ${{ github.event.inputs.kernel }}
           With-FW: ${{ github.event.inputs.with_fw }}
@@ -255,19 +316,19 @@ jobs:
           
           echo "${{ github.sha }}" > artifact/source-commit.txt
           
-          tar -czf iphone11-a13-ramdisk.tar.gz -C artifact .
+          tar -czf "${DEVICE_SLUG}-ramdisk.tar.gz" -C artifact .
           
           echo "=== Final artifact ==="
           find artifact -type f
-          du -ah artifact iphone11-a13-ramdisk.tar.gz
+          du -ah artifact "${DEVICE_SLUG}-ramdisk.tar.gz"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iphone11-a13-ramdisk-${{ github.event.inputs.ios_version }}
+          name: ${{ env.DEVICE_SLUG }}-ramdisk-${{ github.event.inputs.ios_version }}
           path: |
             artifact/
-            iphone11-a13-ramdisk.tar.gz
+            ${{ env.DEVICE_SLUG }}-ramdisk.tar.gz
           if-no-files-found: error
 
       - name: Restore original files
