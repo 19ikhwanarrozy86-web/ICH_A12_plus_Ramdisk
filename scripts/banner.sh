@@ -2,8 +2,8 @@
 # Shared branding for build / boot / status output.
 
 NR_VERSION="${NR_VERSION:-v1.Zero}"
-NR_AUTHOR="${NR_AUTHOR:-@Official_I_C_H}"
-NR_TELEGRAM="${NR_TELEGRAM:-https://t.me/Official_I_C_H}"
+NR_AUTHOR="${NR_AUTHOR:-@20obb}"
+NR_TELEGRAM="${NR_TELEGRAM:-https://github.com/20obb}"
 
 nr_banner() {
     local stage="${1:-new_ramdisk}"

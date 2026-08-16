@@ -1,8 +1,8 @@
-# ICH_A12_plus_Ramdisk `v1.2`
+# ICH_A12_plus_Ramdisk `V2.0`
 
 > **Apple A12 / A13 SSH Ramdisk Toolkit** for pwned DFU mode via [usbliter8](https://github.com/prdgmshift/usbliter8).
 
-Original Toolkit by **[@Official_I_C_H](https://t.me/Official_I_C_H)** · [t.me/Official_I_C_H](https://t.me/Official_I_C_H)  
+Original Toolkit by **[@20obb](https://github.com/20obb)** · [t.me/20obb](https://github.com/20obb)  
 Linux Port & Maintenance by **[20obb](https://github.com/20obb)**  
 Copyright (c) 20obb. All rights reserved.
 
@@ -17,7 +17,7 @@ Copyright (c) 20obb. All rights reserved.
 
 ---
 
-## ✨ What’s New in v1.2
+## ✨ What’s New in V2.0
 
 - **Linux Backend & Full SSH Support:** Cross-platform Linux boot runtime (`sudo ./boot.sh --debug --with-fw`).
 - **One-Click SSH Connector:** Dedicated `./ssh.sh` helper that automatically manages `iproxy` in the background and opens the interactive SSH shell.
@@ -149,6 +149,6 @@ mount_ich
 
 ## 📜 Copyright & Credits
 
-- **Original Toolkit:** [@Official_I_C_H](https://t.me/Official_I_C_H)
+- **Original Toolkit:** [@20obb](https://github.com/20obb)
 - **Linux Port & Maintenance:** [20obb](https://github.com/20obb)
 - **Copyright:** © 20obb ([GitHub: @20obb](https://github.com/20obb)). All rights reserved.

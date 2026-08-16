@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install host dependencies for ICHA12A13 Ramdisk (v1.2) on a fresh macOS.
+# Install host dependencies for ICHA12A13 Ramdisk (V2.0) on a fresh macOS.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
