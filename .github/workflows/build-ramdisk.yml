@@ -4,169 +4,287 @@ on:
   workflow_dispatch:
     inputs:
       ios_version:
-        description: "iOS version to build (example: 18.7.9)"
+        description: 'iOS version or Build ID (e.g. 26.5.2 or 23F84)'
         required: true
+        default: '23F84'
         type: string
-      with_fw:
-        description: "Include coprocessor firmware"
-        required: true
-        default: true
-        type: boolean
       kernel:
-        description: "Kernel mode"
+        description: 'Kernel patch mode'
         required: true
-        default: "patched"
+        default: 'patched'
         type: choice
         options:
           - patched
           - stock
+      with_fw:
+        description: 'Include coprocessor firmware (AOP/ANE/AVE/ISP/GFX/SIO/PMP)'
+        required: true
+        default: true
+        type: boolean
 
 jobs:
   build:
     runs-on: macos-15
-
+    timeout-minutes: 45
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        shell: bash
+      - name: Show environment
         run: |
-          set -euxo pipefail
+          echo "=== macOS Version ==="
+          sw_vers
+          echo "=== Architecture ==="
+          uname -m
+          echo "=== PATH ==="
+          tr ':' '\n' <<< "$PATH"
+
+      - name: Install system dependencies
+        run: |
+          set -e
           brew update
-          brew install python@3 curl jq
-          brew install ipsw
-          python3 -m pip install --upgrade pip --break-system-packages
-          python3 -m pip install -r requirements.txt --break-system-packages
+          brew install ipsw curl python@3
+          which ipsw || { echo "FAIL: ipsw not installed" >&2; exit 1; }
+          which python3 || { echo "FAIL: python3 not installed" >&2; exit 1; }
+          echo "OK: ipsw $(ipsw version 2>/dev/null | head -1)"
 
-      - name: Verify tools
-        shell: bash
+      - name: Setup Python venv
         run: |
-          set -euxo pipefail
-          command -v hdiutil
-          command -v diskutil
-          command -v ipsw
-          command -v jq
-          python3 -c "import pyimg4, capstone; print('Python deps OK')"
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          if [[ -f requirements.txt ]]; then
+            python -m pip install -r requirements.txt
+          else
+            echo "WARNING: requirements.txt missing, installing known deps"
+            python -m pip install pyimg4 capstone pillow
+          fi
+          python -c "import pyimg4, capstone; print('OK: pyimg4 + capstone')"
+          echo "VENV_PYTHON=$(pwd)/.venv/bin/python" >> "$GITHUB_ENV"
 
-          for f in \
-            tools/darwin/irecovery \
-            tools/darwin/pzb \
-            tools/darwin/img4 \
-            tools/darwin/gtar \
-            tools/darwin/trustcache \
-            tools/darwin/jq \
-            tools/darwin/usbliter8_boot \
-            resources/ssh.tar.gz \
-            resources/sshtarlist.txt \
-            resources/IM4M_0x8030
-          do
-            test -e "$f" || { echo "Missing $f"; exit 1; }
+      - name: Verify repository structure
+        run: |
+          set -e
+          for f in build.sh env.sh scripts/devices.sh scripts/ramdisk_expand.sh patch/iboot_patchfinder.py patch/apply_kernel_patches.py patch/finalize_iboot.py patch/preflight.py; do
+            [[ -f "$f" ]] || { echo "MISS: $f" >&2; exit 1; }
+            echo "OK: $f"
+          done
+          for r in resources/IM4M_0x8030 resources/ssh.tar.gz resources/sshtarlist.txt; do
+            [[ -f "$r" ]] || { echo "MISS: $r" >&2; exit 1; }
+            echo "OK: $r"
+          done
+          chmod +x tools/darwin/*
+          for t in pzb img4 gtar trustcache jq; do
+            [[ -x "tools/darwin/$t" ]] || { echo "MISS: tool $t" >&2; exit 1; }
+            echo "OK: tool: $t"
           done
 
-      - name: Patch build.sh for build-only mode
-        shell: bash
+      - name: Patch build.sh for case-insensitive DeviceClass
         run: |
-          set -euxo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("build.sh")
-          s = p.read_text()
-
-          import re
-
-          marker = 'echo "=== device ==="'
-          pattern = r'DEVICE_INFO=.*?\n(.*?)(?=' + re.escape(marker) + r')'
-          m = re.search(pattern, s, flags=re.DOTALL)
-          if not m:
-              raise SystemExit("Could not locate upstream device-detection block in build.sh")
-
-          replacement = '''PRODUCT="iPhone12,1"
-          MODEL="N104AP"
-          CPID="0x8030"
-          MODE="DFU"
-          PWND="usbliter8"
-          ECID="build-only"
-          NAME="iPhone 11"
-
-          nr_is_supported_cpid "$CPID" || {
-              echo "unsupported CPID $CPID" >&2
-              exit 1
-          }
-          CHIP="$(nr_chip_for_cpid "$CPID")"
-          echo "=== build-only target ==="
-          echo "  name:     $NAME"
-          echo "  product:  $PRODUCT"
-          echo "  board:    $MODEL"
-          echo "  cpid:     $CPID ($CHIP)"
-          echo "  mode:     $MODE"
-          echo "  pwnd:     $PWND"
-          '''
-
-          s = s[:m.start()] + replacement + s[m.end():]
-          p.write_text(s)
+          set -e
+          cp build.sh build.sh.bak
+          python3 << 'PY'
+          import sys
+          with open('build.sh', 'r') as f:
+              content = f.read()
+          orig = 'if item.get("Info", {}).get("DeviceClass") == board'
+          repl = 'if item.get("Info", {}).get("DeviceClass", "").lower() == board.lower()'
+          if orig not in content:
+              print("WARNING: original pattern not found; build.sh may already be patched or changed")
+              sys.exit(0)
+          content = content.replace(orig, repl)
+          with open('build.sh', 'w') as f:
+              f.write(content)
+          print("Patched build.sh: case-insensitive DeviceClass matching")
           PY
+          diff -u build.sh.bak build.sh || true
 
-          sed -n '108,175p' build.sh
+      - name: Patch env.sh so a CI venv actually gets used
+        # env.sh rebuilds PATH as:
+        #   /usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$NR_TOOLS:<inherited PATH>
+        # /usr/bin comes first, so every bare `python3` call inside build.sh (including
+        # the pyimg4-based wrap_kernel() heredoc) resolves to the system CLT/Homebrew
+        # python3, never to the venv from "Setup Python venv" above - no matter how that
+        # venv was activated before ./build.sh was invoked. That's exactly why the build
+        # fails with "ModuleNotFoundError: No module named 'pyimg4'" right after the
+        # AOP/ANE/AVE/ISP/GFX/SIO firmware is staged: it's the first bare `python3 <<EOF`
+        # call in build.sh that actually needs a third-party package instead of stdlib.
+        # Prepend $VIRTUAL_ENV/bin when a venv is active so build.sh picks it up; falls
+        # back to the original resolution order when no venv is active (unchanged
+        # behaviour for manual, non-CI runs).
+        run: |
+          set -e
+          cp env.sh env.sh.bak
+          python3 << 'PY'
+          with open('env.sh', 'r') as f:
+              content = f.read()
+          orig = 'export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$NR_TOOLS${PATH:+:$PATH}"'
+          repl = 'export PATH="${VIRTUAL_ENV:+$VIRTUAL_ENV/bin:}/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$NR_TOOLS${PATH:+:$PATH}"'
+          if orig not in content:
+              print("WARNING: env.sh PATH line not found as expected; leaving untouched")
+          else:
+              content = content.replace(orig, repl)
+              with open('env.sh', 'w') as f:
+                  f.write(content)
+              print("Patched env.sh: python3 now prefers an active venv over system python3")
+          PY
+          diff -u env.sh.bak env.sh || true
+
+      - name: Replace irecovery with CI shim
+        run: |
+          set -e
+          # build.sh uses $NR_TOOLS/irecovery (absolute path), not PATH.
+          # We must replace the actual binary temporarily.
+          mv tools/darwin/irecovery tools/darwin/irecovery.stock
+          cat > tools/darwin/irecovery << 'SHIM'
+          #!/bin/bash
+          if [[ "$1" == "-q" ]]; then
+            cat << 'INNER'
+          PRODUCT: iPhone12,1
+          MODEL: N104AP
+          CPID: 0x8030
+          MODE: DFU
+          PWND: usbliter8
+          ECID: 0000000000000000
+          NAME: iPhone 11
+          INNER
+          else
+            echo "irecovery shim: unsupported args: $@" >&2
+            exit 1
+          fi
+          SHIM
+          chmod +x tools/darwin/irecovery
+          echo "=== Shim test (via absolute path) ==="
+          tools/darwin/irecovery -q
+
+      - name: Pre-build debug — inspect BuildManifest
+        # Uses the ipsw CLI (parameterized by ios_version) instead of a hardcoded pzb
+        # URL, so this debug step reflects whatever build was actually selected for
+        # this run instead of always showing the 23F84 / iOS 26.5.2 manifest.
+        run: |
+          set +e
+          source .venv/bin/activate
+          mkdir -p /tmp/bm_debug
+          cd /tmp/bm_debug
+          echo "=== Downloading BuildManifest via ipsw CLI ==="
+          ipsw download ipsw --device iPhone12,1 --build "${{ github.event.inputs.ios_version }}" --build-manifest --output .
+          if [[ -f BuildManifest.plist ]]; then
+            python3 << 'PY'
+          import plistlib
+          try:
+              manifest = plistlib.loads(open("BuildManifest.plist", "rb").read())
+              identities = manifest.get("BuildIdentities", [])
+              print("=== BUILD IDENTITIES ===")
+              for i, ident in enumerate(identities):
+                  info = ident.get("Info", {})
+                  print(f"Index {i}: DeviceClass={info.get('DeviceClass','N/A')} ProductType={info.get('ProductType','N/A')} BoardConfig={info.get('BoardConfig','N/A')} BuildNumber={info.get('BuildNumber','N/A')} RestoreBehavior={info.get('RestoreBehavior','N/A')}")
+          except Exception as e:
+              print(f"Failed to parse BuildManifest: {e}")
+          PY
+          else
+            echo "WARNING: Could not download BuildManifest for debug inspection"
+          fi
+          cd -
 
       - name: Build bootchain
-        shell: bash
-        env:
-          IOS_VERSION: ${{ inputs.ios_version }}
-          KERNEL_MODE: ${{ inputs.kernel }}
-          WITH_FW: ${{ inputs.with_fw }}
         run: |
-          set -euxo pipefail
+          set -e
+          # Now that env.sh (patched above) prepends $VIRTUAL_ENV/bin ahead of system
+          # python3, activating the venv here actually determines which python3
+          # build.sh's internal `python3 <<EOF` calls (e.g. wrap_kernel's pyimg4 use)
+          # will resolve to.
+          source .venv/bin/activate
+          export PATH="$(pwd)/.venv/bin:$PATH"
 
-          if [[ "$WITH_FW" == "true" ]]; then
-            ./build.sh --version "$IOS_VERSION" --with-fw --kernel "$KERNEL_MODE" --kpf-set auto
+          ARGS="--build ${{ github.event.inputs.ios_version }}"
+          ARGS="$ARGS --kernel ${{ github.event.inputs.kernel }}"
+          if [[ "${{ github.event.inputs.with_fw }}" == "true" ]]; then
+            ARGS="$ARGS --with-fw"
           else
-            ./build.sh --version "$IOS_VERSION" --no-fw --kernel "$KERNEL_MODE" --kpf-set auto
+            ARGS="$ARGS --no-fw"
           fi
+          
+          echo "=== SELECTED BUILD IDENTITY ==="
+          echo "Device: iPhone 11 (iPhone12,1 / N104AP / 0x8030)"
+          echo "Build:  ${{ github.event.inputs.ios_version }}"
+          echo "Kernel: ${{ github.event.inputs.kernel }}"
+          echo "With-FW: ${{ github.event.inputs.with_fw }}"
+          echo "==========================="
+          
+          ./build.sh $ARGS
 
-      - name: Show generated files
-        shell: bash
+      - name: Inspect bootchain
         run: |
-          set -euxo pipefail
-          find bootchain -maxdepth 3 -type f -print | sort
-          du -ah bootchain | sort -h | tail -50
+          set -e
+          echo "=== Bootchain files ==="
+          find bootchain -type f -print
+          echo "=== Bootchain sizes ==="
+          du -ah bootchain
+          echo "=== chain.info ==="
+          cat bootchain/*/chain.info || true
 
-      - name: Package output
-        shell: bash
-        env:
-          IOS_VERSION: ${{ inputs.ios_version }}
-          KERNEL_MODE: ${{ inputs.kernel }}
-          WITH_FW: ${{ inputs.with_fw }}
+      - name: Package artifact
         run: |
-          set -euxo pipefail
-
-          mkdir -p artifact
-          cp -R bootchain artifact/bootchain
-          cp README.md artifact/README-upstream.md
-          git rev-parse HEAD > artifact/source-commit.txt
-
-          cat > artifact/BUILD-INFO.txt <<INFO
-          Target: iPhone 11
-          Product: iPhone12,1
+          set -e
+          BOOTCHAIN_DIR=$(find bootchain -maxdepth 1 -type d | tail -n +2 | head -1)
+          if [[ -z "$BOOTCHAIN_DIR" ]]; then
+            echo "ERROR: No bootchain directory found" >&2
+            exit 1
+          fi
+          BUILD_NAME=$(basename "$BOOTCHAIN_DIR")
+          echo "BOOTCHAIN_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
+          
+          mkdir -p artifact/bootchain
+          cp -R "$BOOTCHAIN_DIR"/* artifact/bootchain/
+          
+          cat > artifact/BUILD-INFO.txt << EOF
+          Device: iPhone 11
+          ProductType: iPhone12,1
           BoardConfig: N104AP
           CPID: 0x8030
-          iOS: ${IOS_VERSION}
-          Kernel: ${KERNEL_MODE}
-          With firmware: ${WITH_FW}
-          Runner: macOS-15
-          Mode: build-only; no iPhone connected to GitHub Actions
-          INFO
-
-          tar -C artifact -czf iphone11-a13-ramdisk.tar.gz .
+          Chip: A13 / T8030
+          Build: ${{ github.event.inputs.ios_version }}
+          Kernel: ${{ github.event.inputs.kernel }}
+          With-FW: ${{ github.event.inputs.with_fw }}
+          Runner: macos-15
+          Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Repository: ${{ github.repository }}
+          Commit: ${{ github.sha }}
+          EOF
+          
+          echo "${{ github.sha }}" > artifact/source-commit.txt
+          
+          tar -czf iphone11-a13-ramdisk.tar.gz -C artifact .
+          
+          echo "=== Final artifact ==="
+          find artifact -type f
+          du -ah artifact iphone11-a13-ramdisk.tar.gz
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iphone11-a13-ramdisk-${{ inputs.ios_version }}
+          name: iphone11-a13-ramdisk-${{ github.event.inputs.ios_version }}
           path: |
-            iphone11-a13-ramdisk.tar.gz
             artifact/
+            iphone11-a13-ramdisk.tar.gz
           if-no-files-found: error
-          retention-days: 14
+
+      - name: Restore original files
+        if: always()
+        run: |
+          # Restore original irecovery
+          if [[ -f tools/darwin/irecovery.stock ]]; then
+            mv -f tools/darwin/irecovery.stock tools/darwin/irecovery
+            echo "Restored original irecovery"
+          fi
+          # Restore original build.sh
+          if [[ -f build.sh.bak ]]; then
+            mv -f build.sh.bak build.sh
+            echo "Restored original build.sh"
+          fi
+          # Restore original env.sh
+          if [[ -f env.sh.bak ]]; then
+            mv -f env.sh.bak env.sh
+            echo "Restored original env.sh"
+          fi
