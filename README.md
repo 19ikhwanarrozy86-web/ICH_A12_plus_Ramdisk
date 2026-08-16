@@ -2,7 +2,6 @@
 
 > **Apple A12 / A13 SSH Ramdisk Toolkit** for pwned DFU mode via [usbliter8](https://github.com/prdgmshift/usbliter8).
 
-Original Toolkit by **[@20obb](https://github.com/20obb)** · [t.me/20obb](https://github.com/20obb)  
 Linux Port & Maintenance by **[20obb](https://github.com/20obb)**  
 Copyright (c) 20obb. All rights reserved.
 
@@ -148,7 +147,5 @@ mount_ich
 ---
 
 ## 📜 Copyright & Credits
-
-- **Original Toolkit:** [@20obb](https://github.com/20obb)
 - **Linux Port & Maintenance:** [20obb](https://github.com/20obb)
 - **Copyright:** © 20obb ([GitHub: @20obb](https://github.com/20obb)). All rights reserved.
