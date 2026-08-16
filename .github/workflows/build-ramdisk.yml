@@ -1,14 +1,30 @@
-name: Build iPhone 11 A13 Ramdisk
+name: Build A12/A13 SSH Ramdisk
 
 on:
   workflow_dispatch:
     inputs:
+      device:
+        description: "Target Apple device (e.g. iPhone12,1, iPhone11,8, iPad12,1)"
+        required: true
+        default: "iPhone12,1"
+        type: choice
+        options:
+          - "iPhone12,1" # iPhone 11 (A13)
+          - "iPhone12,3" # iPhone 11 Pro (A13)
+          - "iPhone12,5" # iPhone 11 Pro Max (A13)
+          - "iPhone12,8" # iPhone SE 2nd Gen (A13)
+          - "iPhone11,8" # iPhone XR (A12)
+          - "iPhone11,2" # iPhone XS (A12)
+          - "iPhone11,6" # iPhone XS Max (A12)
+          - "iPad12,1"   # iPad 9th Gen (A13)
+          - "iPad11,3"   # iPad Air 3rd Gen (A12)
+          - "iPad11,1"   # iPad mini 5th Gen (A12)
       ios_version:
-        description: "iOS version to build (example: 18.7.9)"
+        description: "iOS version to build (e.g. 16.5.1, 17.5.1, 18.0)"
         required: true
         type: string
       with_fw:
-        description: "Include coprocessor firmware"
+        description: "Include coprocessor firmwares (AOP/ANE/AVE/ISP/GFX/SIO/PMP)"
         required: true
         default: true
         type: boolean
@@ -20,26 +36,38 @@ on:
         options:
           - patched
           - stock
+      kpf_set:
+        description: "Kernel patchfinder profile"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - ios17
+          - ios18
+          - ios26
+          - ios27
+          - debugger+amfi
+          - all
 
 jobs:
   build:
     runs-on: macos-15
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install macOS build dependencies
         shell: bash
         run: |
           set -euxo pipefail
           brew update
-          brew install python@3 curl jq
-          brew install ipsw
+          brew install python@3 curl jq ipsw
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
 
-      - name: Verify tools
+      - name: Verify build tools & resources
         shell: bash
         run: |
           set -euxo pipefail
@@ -47,7 +75,7 @@ jobs:
           command -v diskutil
           command -v ipsw
           command -v jq
-          python3 -c "import pyimg4, capstone; print('Python deps OK')"
+          python3 -c "import pyimg4, capstone; print('Python dependencies OK')"
 
           for f in \
             tools/darwin/irecovery \
@@ -58,84 +86,45 @@ jobs:
             tools/darwin/jq \
             tools/darwin/usbliter8_boot \
             resources/ssh.tar.gz \
-            resources/sshtarlist.txt \
-            resources/IM4M_0x8030
+            resources/sshtarlist.txt
           do
             test -e "$f" || { echo "Missing $f"; exit 1; }
           done
 
-      - name: Patch build.sh for build-only mode
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("build.sh")
-          s = p.read_text()
-
-          import re
-
-          marker = 'echo "=== device ==="'
-          pattern = r'DEVICE_INFO=.*?\n(.*?)(?=' + re.escape(marker) + r')'
-          m = re.search(pattern, s, flags=re.DOTALL)
-          if not m:
-              raise SystemExit("Could not locate upstream device-detection block in build.sh")
-
-          replacement = '''PRODUCT="iPhone12,1"
-          MODEL="N104AP"
-          CPID="0x8030"
-          MODE="DFU"
-          PWND="usbliter8"
-          ECID="build-only"
-          NAME="iPhone 11"
-
-          nr_is_supported_cpid "$CPID" || {
-              echo "unsupported CPID $CPID" >&2
-              exit 1
-          }
-          CHIP="$(nr_chip_for_cpid "$CPID")"
-          echo "=== build-only target ==="
-          echo "  name:     $NAME"
-          echo "  product:  $PRODUCT"
-          echo "  board:    $MODEL"
-          echo "  cpid:     $CPID ($CHIP)"
-          echo "  mode:     $MODE"
-          echo "  pwnd:     $PWND"
-          '''
-
-          s = s[:m.start()] + replacement + s[m.end():]
-          p.write_text(s)
-          PY
-
-          sed -n '108,175p' build.sh
-
       - name: Build bootchain
         shell: bash
         env:
+          TARGET_DEVICE: ${{ inputs.device }}
           IOS_VERSION: ${{ inputs.ios_version }}
           KERNEL_MODE: ${{ inputs.kernel }}
           WITH_FW: ${{ inputs.with_fw }}
+          KPF_SET: ${{ inputs.kpf_set }}
         run: |
           set -euxo pipefail
 
-          if [[ "$WITH_FW" == "true" ]]; then
-            ./build.sh --version "$IOS_VERSION" --with-fw --kernel "$KERNEL_MODE" --kpf-set auto
-          else
-            ./build.sh --version "$IOS_VERSION" --no-fw --kernel "$KERNEL_MODE" --kpf-set auto
+          FW_FLAG="--with-fw"
+          if [[ "$WITH_FW" != "true" ]]; then
+            FW_FLAG="--no-fw"
           fi
 
-      - name: Show generated files
+          ./build.sh \
+            --device "$TARGET_DEVICE" \
+            --version "$IOS_VERSION" \
+            "$FW_FLAG" \
+            --kernel "$KERNEL_MODE" \
+            --kpf-set "$KPF_SET"
+
+      - name: Inspect generated bootchain
         shell: bash
         run: |
           set -euxo pipefail
           find bootchain -maxdepth 3 -type f -print | sort
           du -ah bootchain | sort -h | tail -50
 
-      - name: Package output
+      - name: Package artifact bundle
         shell: bash
         env:
+          TARGET_DEVICE: ${{ inputs.device }}
           IOS_VERSION: ${{ inputs.ios_version }}
           KERNEL_MODE: ${{ inputs.kernel }}
           WITH_FW: ${{ inputs.with_fw }}
@@ -148,25 +137,25 @@ jobs:
           git rev-parse HEAD > artifact/source-commit.txt
 
           cat > artifact/BUILD-INFO.txt <<INFO
-          Target: iPhone 11
-          Product: iPhone12,1
-          BoardConfig: N104AP
-          CPID: 0x8030
-          iOS: ${IOS_VERSION}
-          Kernel: ${KERNEL_MODE}
-          With firmware: ${WITH_FW}
+          Target Product: ${TARGET_DEVICE}
+          iOS Version: ${IOS_VERSION}
+          Kernel Mode: ${KERNEL_MODE}
+          With Firmware: ${WITH_FW}
           Runner: macOS-15
-          Mode: build-only; no iPhone connected to GitHub Actions
+          Build Mode: GitHub Actions CI
+          Commit: $(git rev-parse HEAD)
           INFO
 
-          tar -C artifact -czf iphone11-a13-ramdisk.tar.gz .
+          ARCHIVE_NAME="${TARGET_DEVICE}-${IOS_VERSION}-ramdisk.tar.gz"
+          tar -C artifact -czf "$ARCHIVE_NAME" .
+          echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> "$GITHUB_ENV"
 
-      - name: Upload artifact
+      - name: Upload bootchain artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iphone11-a13-ramdisk-${{ inputs.ios_version }}
+          name: ${{ env.ARCHIVE_NAME }}
           path: |
-            iphone11-a13-ramdisk.tar.gz
+            ${{ env.ARCHIVE_NAME }}
             artifact/
           if-no-files-found: error
           retention-days: 14

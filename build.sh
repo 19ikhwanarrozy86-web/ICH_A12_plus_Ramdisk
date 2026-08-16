@@ -41,22 +41,27 @@ KERNEL_MODE_SET=0
 KPF_SET_SET=0
 INTERACTIVE=0
 
+BUILD_DEVICE="${BUILD_DEVICE:-}"
+BUILD_MODEL="${BUILD_MODEL:-}"
+BUILD_CPID="${BUILD_CPID:-}"
+
 usage() {
     cat <<'EOF'
 usage: ./build.sh [--version VERSION|--build BUILD|--url IPSW_URL]
-                  [--list] [--im4m PATH]
+                  [--device PRODUCT] [--list] [--im4m PATH]
                   [--kernel stock|patched] [--kpf-set SET]
                   [--with-fw|--no-fw] [--use-ibss] [--live-data] [--dry-run]
 
-Detects the connected pwned DFU A12/A13 device, resolves firmware from
-ipsw.me (or --url), builds an SSH ramdisk, and stages a bootchain under
-./bootchain/<board>-<ver>-<build>-ramdisk/.
+Detects the connected pwned DFU A12/A13 device (or uses --device in CI/offline mode),
+resolves firmware from ipsw.me (or --url), builds an SSH ramdisk, and stages a
+bootchain under ./bootchain/<board>-<ver>-<build>-ramdisk/.
 
 Pwned DFU requires RP2350 + https://github.com/prdgmshift/usbliter8
 Run ./setup.sh once on a new Mac before building.
 
 If neither --version nor --build is given, an interactive firmware picker runs.
 
+  --device NAME  target device without connected hardware (e.g. iPhone12,1, iPhone11,8, etc.)
   --list         list firmwares for the connected device and exit
   --im4m PATH    IM4M / APTicket (default: resources/IM4M_<CPID>)
   --kernel       patched (default, usbliter8ra1n AMFI) | stock (fallback)
@@ -67,12 +72,17 @@ If neither --version nor --build is given, an interactive firmware picker runs.
   --live-data    also mark bootchain for live-data experiments (RestoreSEP is always staged)
   --dry-run      resolve IPSW + BuildManifest only
 
-Requires: device in DFU with PWND: usbliter8; deps from ./setup.sh.
+Requires: device in DFU with PWND: usbliter8 (or --device); deps from ./setup.sh.
 EOF
 }
 
 while (($#)); do
     case "$1" in
+        --device)
+            (($# >= 2)) || { usage >&2; exit 64; }
+            BUILD_DEVICE="$2"
+            shift 2
+            ;;
         --build|--version)
             (($# >= 2)) || { usage >&2; exit 64; }
             SELECTION="$2"
@@ -129,31 +139,97 @@ for tool in "$IRECOVERY" "$PZB" "$IMG4" "$GTAR" "$TC" "$JQ" curl ipsw python3 hd
     fi
 done
 
-DEVICE_INFO="$("$IRECOVERY" -q)"
-field() {
-    awk -F': ' -v key="$1" '$1 == key { print $2; exit }' <<<"$DEVICE_INFO"
-}
-PRODUCT="$(field PRODUCT)"
-MODEL="$(field MODEL)"
-CPID="$(field CPID)"
-MODE="$(field MODE)"
-PWND="$(field PWND)"
-ECID="$(field ECID)"
-NAME="$(field NAME)"
+if [[ -n "$BUILD_DEVICE" ]]; then
+    MODE="DFU"
+    PWND="usbliter8"
+    ECID="build-only"
+    case "${BUILD_DEVICE,,}" in
+        iphone12,1|n104ap|iphone11|"iphone 11")
+            PRODUCT="iPhone12,1"; MODEL="N104AP"; CPID="0x8030"; NAME="iPhone 11" ;;
+        iphone12,3|d421ap|iphone11pro|"iphone 11 pro")
+            PRODUCT="iPhone12,3"; MODEL="D421AP"; CPID="0x8030"; NAME="iPhone 11 Pro" ;;
+        iphone12,5|d431ap|iphone11promax|"iphone 11 pro max")
+            PRODUCT="iPhone12,5"; MODEL="D431AP"; CPID="0x8030"; NAME="iPhone 11 Pro Max" ;;
+        iphone12,8|d79ap|iphonese2|"iphone se 2"|"iphone se (2nd generation)")
+            PRODUCT="iPhone12,8"; MODEL="D79AP"; CPID="0x8030"; NAME="iPhone SE (2nd generation)" ;;
+        iphone11,8|n841ap|iphonexr|"iphone xr")
+            PRODUCT="iPhone11,8"; MODEL="N841AP"; CPID="0x8020"; NAME="iPhone XR" ;;
+        iphone11,2|d321ap|iphonexs|"iphone xs")
+            PRODUCT="iPhone11,2"; MODEL="D321AP"; CPID="0x8020"; NAME="iPhone XS" ;;
+        iphone11,6|d331ap|iphonexsmax|"iphone xs max")
+            PRODUCT="iPhone11,6"; MODEL="D331AP"; CPID="0x8020"; NAME="iPhone XS Max" ;;
+        iphone11,4|d331pap)
+            PRODUCT="iPhone11,4"; MODEL="D331pAP"; CPID="0x8020"; NAME="iPhone XS Max (China)" ;;
+        ipad12,1|j307ap|ipad9|"ipad 9")
+            PRODUCT="iPad12,1"; MODEL="J307AP"; CPID="0x8030"; NAME="iPad (9th generation, Wi-Fi)" ;;
+        ipad12,2|j308ap)
+            PRODUCT="iPad12,2"; MODEL="J308AP"; CPID="0x8030"; NAME="iPad (9th generation, Cellular)" ;;
+        ipad11,1|j210ap|ipadmini5|"ipad mini 5")
+            PRODUCT="iPad11,1"; MODEL="J210AP"; CPID="0x8020"; NAME="iPad mini (5th generation, Wi-Fi)" ;;
+        ipad11,2|j210aap)
+            PRODUCT="iPad11,2"; MODEL="J210aAP"; CPID="0x8020"; NAME="iPad mini (5th generation, Cellular)" ;;
+        ipad11,3|j217ap|ipadair3|"ipad air 3")
+            PRODUCT="iPad11,3"; MODEL="J217AP"; CPID="0x8020"; NAME="iPad Air (3rd generation, Wi-Fi)" ;;
+        ipad11,4|j218ap)
+            PRODUCT="iPad11,4"; MODEL="J218AP"; CPID="0x8020"; NAME="iPad Air (3rd generation, Cellular)" ;;
+        ipad8,1|j320ap)
+            PRODUCT="iPad8,1"; MODEL="J320AP"; CPID="0x8027"; NAME="iPad Pro 11-inch (1st generation, Wi-Fi)" ;;
+        ipad8,2|j321ap)
+            PRODUCT="iPad8,2"; MODEL="J321AP"; CPID="0x8027"; NAME="iPad Pro 11-inch (1st generation, Cellular)" ;;
+        ipad8,5|j417ap)
+            PRODUCT="iPad8,5"; MODEL="J417AP"; CPID="0x8027"; NAME="iPad Pro 12.9-inch (3rd generation, Wi-Fi)" ;;
+        ipad8,6|j418ap)
+            PRODUCT="iPad8,6"; MODEL="J418AP"; CPID="0x8027"; NAME="iPad Pro 12.9-inch (3rd generation, Cellular)" ;;
+        *)
+            PRODUCT="$BUILD_DEVICE"
+            MODEL="${BUILD_MODEL:-N104AP}"
+            CPID="${BUILD_CPID:-0x8030}"
+            NAME="$BUILD_DEVICE"
+            ;;
+    esac
+    echo "=== build-only target ==="
+    echo "  name:     $NAME"
+    echo "  product:  $PRODUCT"
+    echo "  board:    $MODEL"
+    echo "  cpid:     $CPID"
+    echo "  mode:     $MODE"
+    echo "  pwnd:     $PWND"
+else
+    DEVICE_INFO="$("$IRECOVERY" -q 2>/dev/null || true)"
+    field() {
+        awk -F': ' -v key="$1" '$1 == key { print $2; exit }' <<<"$DEVICE_INFO"
+    }
+    PRODUCT="$(field PRODUCT)"
+    MODEL="$(field MODEL)"
+    CPID="$(field CPID)"
+    MODE="$(field MODE)"
+    PWND="$(field PWND)"
+    ECID="$(field ECID)"
+    NAME="$(field NAME)"
 
-[[ -n "$PRODUCT" && -n "$MODEL" && -n "$CPID" ]] || {
-    echo "irecovery did not return PRODUCT, MODEL, and CPID" >&2
-    echo "Connect the device in DFU after usbliter8." >&2
-    exit 1
-}
-[[ "$MODE" == "DFU" ]] || {
-    echo "builder requires DFU; device reports MODE=$MODE" >&2
-    exit 1
-}
-[[ "$PWND" == "usbliter8" ]] || {
-    echo "device must be pwned with usbliter8 (PWND: usbliter8); got PWND=${PWND:-none}" >&2
-    exit 1
-}
+    [[ -n "$PRODUCT" && -n "$MODEL" && -n "$CPID" ]] || {
+        echo "irecovery did not return PRODUCT, MODEL, and CPID" >&2
+        echo "Connect the device in DFU after usbliter8, or use --device <PRODUCT> for offline/CI build." >&2
+        exit 1
+    }
+    [[ "$MODE" == "DFU" ]] || {
+        echo "builder requires DFU; device reports MODE=$MODE" >&2
+        exit 1
+    }
+    [[ "$PWND" == "usbliter8" ]] || {
+        echo "device must be pwned with usbliter8 (PWND: usbliter8); got PWND=${PWND:-none}" >&2
+        exit 1
+    }
+    echo "=== device ==="
+    echo "  name:     ${NAME:-unknown}"
+    echo "  product:  $PRODUCT"
+    echo "  board:    $MODEL"
+    echo "  cpid:     $CPID"
+    echo "  ecid:     ${ECID:-unknown}"
+    echo "  mode:     $MODE"
+    echo "  pwnd:     $PWND"
+fi
+
 nr_is_supported_cpid "$CPID" || {
     echo "unsupported CPID $CPID (this toolkit targets A12/A13: 0x8020 / 0x8030)" >&2
     exit 1
@@ -163,14 +239,6 @@ if [[ "$CHIP" == "A12X" ]]; then
     echo "warning: A12X (0x8027) — usbliter8 offsets TBD; proceed at your own risk" >&2
 fi
 
-echo "=== device ==="
-echo "  name:     ${NAME:-unknown}"
-echo "  product:  $PRODUCT"
-echo "  board:    $MODEL"
-echo "  cpid:     $CPID ($CHIP)"
-echo "  ecid:     ${ECID:-unknown}"
-echo "  mode:     $MODE"
-echo "  pwnd:     $PWND"
 
 API_JSON="$(curl --fail --silent --show-error --location \
     "https://api.ipsw.me/v4/device/$PRODUCT?type=ipsw")"
