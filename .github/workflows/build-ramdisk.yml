@@ -1,29 +1,12 @@
-name: Build A12/A13 iPhone Ramdisk
+name: Build iPhone 11 A13 Ramdisk
 
 on:
   workflow_dispatch:
     inputs:
-      device:
-        description: 'Target device'
-        required: true
-        default: 'iPhone 11'
-        type: choice
-        options:
-          - iPhone XS
-          - iPhone XS Max
-          - iPhone XR
-          - iPhone 11
-          - iPhone 11 Pro
-          - iPhone 11 Pro Max
       ios_version:
-        description: 'iOS version or Build ID (e.g. 26.5.2 or 23F84). Ignored when direct_ipsw_url is set.'
+        description: 'iOS version or Build ID (e.g. 26.5.2 or 23F84)'
         required: true
         default: '23F84'
-        type: string
-      direct_ipsw_url:
-        description: 'Direct Apple .ipsw URL. Bypasses build.sh internal api.ipsw.me lookup — use this when a build is too new for ipsw.me to have indexed yet (common for an RC/beta released in the last week or two) even though the IPSW itself is already live on Apple CDN.'
-        required: false
-        default: ''
         type: string
       kernel:
         description: 'Kernel patch mode'
@@ -33,19 +16,6 @@ on:
         options:
           - patched
           - stock
-      kpf_set:
-        description: 'Kernel patchfinder set passed to build.sh --kpf-set. auto only resolves correctly when build.sh knows the real iOS version (i.e. via ios_version); with direct_ipsw_url, build.sh sets VERSION=unknown and auto silently falls back to ios18 — fine for an 18.x/26.x non-TXM target like this one, but override explicitly for a 27+/TXM target.'
-        required: true
-        default: 'auto'
-        type: choice
-        options:
-          - auto
-          - ios17
-          - ios18
-          - ios26
-          - ios27
-          - debugger+amfi
-          - all
       with_fw:
         description: 'Include coprocessor firmware (AOP/ANE/AVE/ISP/GFX/SIO/PMP)'
         required: true
@@ -59,55 +29,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Resolve device identity
-        # Single source of truth for device → (ProductType, BoardConfig, CPID) so
-        # every later step (irecovery shim, ipsw --device, BUILD-INFO.txt, artifact
-        # name) stays in sync automatically instead of re-hardcoding iPhone 11 in
-        # five different places. CPIDs/BoardConfigs cross-checked against
-        # theapplewiki.com / ipsw.me. iPhone XS Max defaults to the global
-        # iPhone11,6/D331pAP identity; swap in iPhone11,4/D331AP below if you
-        # specifically need the mainland-China dual-SIM variant.
-        run: |
-          set -e
-          case "${{ github.event.inputs.device }}" in
-            "iPhone XS")
-              DEVICE_PRODUCT="iPhone11,2"; DEVICE_BOARD="D321AP"
-              DEVICE_CPID="0x8020"; DEVICE_CHIP="A12 / T8020"; DEVICE_SLUG="iphone-xs" ;;
-            "iPhone XS Max")
-              DEVICE_PRODUCT="iPhone11,6"; DEVICE_BOARD="D331pAP"
-              DEVICE_CPID="0x8020"; DEVICE_CHIP="A12 / T8020"; DEVICE_SLUG="iphone-xs-max" ;;
-            "iPhone XR")
-              DEVICE_PRODUCT="iPhone11,8"; DEVICE_BOARD="N841AP"
-              DEVICE_CPID="0x8020"; DEVICE_CHIP="A12 / T8020"; DEVICE_SLUG="iphone-xr" ;;
-            "iPhone 11")
-              DEVICE_PRODUCT="iPhone12,1"; DEVICE_BOARD="N104AP"
-              DEVICE_CPID="0x8030"; DEVICE_CHIP="A13 / T8030"; DEVICE_SLUG="iphone-11" ;;
-            "iPhone 11 Pro")
-              DEVICE_PRODUCT="iPhone12,3"; DEVICE_BOARD="D421AP"
-              DEVICE_CPID="0x8030"; DEVICE_CHIP="A13 / T8030"; DEVICE_SLUG="iphone-11-pro" ;;
-            "iPhone 11 Pro Max")
-              DEVICE_PRODUCT="iPhone12,5"; DEVICE_BOARD="D431AP"
-              DEVICE_CPID="0x8030"; DEVICE_CHIP="A13 / T8030"; DEVICE_SLUG="iphone-11-pro-max" ;;
-            *)
-              echo "ERROR: unknown device '${{ github.event.inputs.device }}'" >&2
-              exit 1 ;;
-          esac
-          DEVICE_NAME="${{ github.event.inputs.device }}"
-          {
-            echo "DEVICE_PRODUCT=$DEVICE_PRODUCT"
-            echo "DEVICE_BOARD=$DEVICE_BOARD"
-            echo "DEVICE_CPID=$DEVICE_CPID"
-            echo "DEVICE_CHIP=$DEVICE_CHIP"
-            echo "DEVICE_SLUG=$DEVICE_SLUG"
-            echo "DEVICE_NAME=$DEVICE_NAME"
-          } >> "$GITHUB_ENV"
-          echo "=== Resolved device ==="
-          echo "Name:    $DEVICE_NAME"
-          echo "Product: $DEVICE_PRODUCT"
-          echo "Board:   $DEVICE_BOARD"
-          echo "CPID:    $DEVICE_CPID"
-          echo "Chip:    $DEVICE_CHIP"
 
       - name: Show environment
         run: |
@@ -149,8 +70,8 @@ jobs:
             [[ -f "$f" ]] || { echo "MISS: $f" >&2; exit 1; }
             echo "OK: $f"
           done
-          for r in "resources/IM4M_${DEVICE_CPID}" resources/ssh.tar.gz resources/sshtarlist.txt; do
-            [[ -f "$r" ]] || { echo "MISS: $r (needed for $DEVICE_NAME / $DEVICE_CPID)" >&2; exit 1; }
+          for r in resources/IM4M_0x8030 resources/ssh.tar.gz resources/sshtarlist.txt; do
+            [[ -f "$r" ]] || { echo "MISS: $r" >&2; exit 1; }
             echo "OK: $r"
           done
           chmod +x tools/darwin/*
@@ -216,20 +137,20 @@ jobs:
           # build.sh uses $NR_TOOLS/irecovery (absolute path), not PATH.
           # We must replace the actual binary temporarily.
           mv tools/darwin/irecovery tools/darwin/irecovery.stock
-          cat > tools/darwin/irecovery << SHIM
+          cat > tools/darwin/irecovery << 'SHIM'
           #!/bin/bash
-          if [[ "\$1" == "-q" ]]; then
+          if [[ "$1" == "-q" ]]; then
             cat << 'INNER'
-          PRODUCT: $DEVICE_PRODUCT
-          MODEL: $DEVICE_BOARD
-          CPID: $DEVICE_CPID
+          PRODUCT: iPhone12,1
+          MODEL: N104AP
+          CPID: 0x8030
           MODE: DFU
           PWND: usbliter8
           ECID: 0000000000000000
-          NAME: $DEVICE_NAME
+          NAME: iPhone 11
           INNER
           else
-            echo "irecovery shim: unsupported args: \$@" >&2
+            echo "irecovery shim: unsupported args: $@" >&2
             exit 1
           fi
           SHIM
@@ -241,17 +162,13 @@ jobs:
         # Uses the ipsw CLI (parameterized by ios_version) instead of a hardcoded pzb
         # URL, so this debug step reflects whatever build was actually selected for
         # this run instead of always showing the 23F84 / iOS 26.5.2 manifest.
-        # Skipped when direct_ipsw_url is set: ios_version is meaningless on that path,
-        # and this is non-gating debug output only (set +e below) — build.sh does its
-        # own manifest validation later regardless.
-        if: ${{ github.event.inputs.direct_ipsw_url == '' }}
         run: |
           set +e
           source .venv/bin/activate
           mkdir -p /tmp/bm_debug
           cd /tmp/bm_debug
           echo "=== Downloading BuildManifest via ipsw CLI ==="
-          ipsw download ipsw --device "$DEVICE_PRODUCT" --build "${{ github.event.inputs.ios_version }}" --build-manifest --output .
+          ipsw download ipsw --device iPhone12,1 --build "${{ github.event.inputs.ios_version }}" --build-manifest --output .
           if [[ -f BuildManifest.plist ]]; then
             python3 << 'PY'
           import plistlib
@@ -271,10 +188,6 @@ jobs:
           cd -
 
       - name: Build bootchain
-        env:
-          # Passed via env: (not spliced straight into the script) since this is a
-          # free-form URL string from a workflow_dispatch input.
-          DIRECT_IPSW_URL: ${{ github.event.inputs.direct_ipsw_url }}
         run: |
           set -e
           # Now that env.sh (patched above) prepends $VIRTUAL_ENV/bin ahead of system
@@ -284,19 +197,8 @@ jobs:
           source .venv/bin/activate
           export PATH="$(pwd)/.venv/bin:$PATH"
 
-          if [[ -n "$DIRECT_IPSW_URL" ]]; then
-            # Bypasses build.sh's own `curl .../api.ipsw.me/v4/device/$PRODUCT` lookup —
-            # the exact source of "no IPSW match for <product> selection <build>" when a
-            # build is newer than ipsw.me's index. build.sh sets VERSION=unknown on this
-            # path, which skips its manifest-build cross-check, but BUILD itself still
-            # gets overwritten from the real downloaded BuildManifest either way, so the
-            # packaged chain.info / BUILD-INFO.txt stay accurate.
-            ARGS="--url $DIRECT_IPSW_URL"
-          else
-            ARGS="--build ${{ github.event.inputs.ios_version }}"
-          fi
+          ARGS="--build ${{ github.event.inputs.ios_version }}"
           ARGS="$ARGS --kernel ${{ github.event.inputs.kernel }}"
-          ARGS="$ARGS --kpf-set ${{ github.event.inputs.kpf_set }}"
           if [[ "${{ github.event.inputs.with_fw }}" == "true" ]]; then
             ARGS="$ARGS --with-fw"
           else
@@ -304,14 +206,9 @@ jobs:
           fi
           
           echo "=== SELECTED BUILD IDENTITY ==="
-          echo "Device: $DEVICE_NAME ($DEVICE_PRODUCT / $DEVICE_BOARD / $DEVICE_CPID)"
-          if [[ -n "$DIRECT_IPSW_URL" ]]; then
-            echo "Source: direct URL (ipsw.me bypass) — $DIRECT_IPSW_URL"
-          else
-            echo "Build:  ${{ github.event.inputs.ios_version }}"
-          fi
+          echo "Device: iPhone 11 (iPhone12,1 / N104AP / 0x8030)"
+          echo "Build:  ${{ github.event.inputs.ios_version }}"
           echo "Kernel: ${{ github.event.inputs.kernel }}"
-          echo "KPF-set: ${{ github.event.inputs.kpf_set }}"
           echo "With-FW: ${{ github.event.inputs.with_fw }}"
           echo "==========================="
           
@@ -337,33 +234,18 @@ jobs:
           fi
           BUILD_NAME=$(basename "$BOOTCHAIN_DIR")
           echo "BOOTCHAIN_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
-
-          # chain.info's build= is always the real BuildNumber pulled from the
-          # downloaded BuildManifest (build.sh overwrites it post-download on both
-          # --build and --url paths) — prefer it over the raw ios_version input,
-          # which is meaningless when direct_ipsw_url was used instead.
-          RESOLVED_BUILD="$(awk -F= '$1=="build"{print $2}' "$BOOTCHAIN_DIR/chain.info" 2>/dev/null)"
-          RESOLVED_BUILD="${RESOLVED_BUILD:-${{ github.event.inputs.ios_version }}}"
-          echo "RESOLVED_BUILD_ID=$RESOLVED_BUILD" >> "$GITHUB_ENV"
-          if [[ -n "${{ github.event.inputs.direct_ipsw_url }}" ]]; then
-            SOURCE_LABEL="direct-url"
-          else
-            SOURCE_LABEL="ipsw.me"
-          fi
           
           mkdir -p artifact/bootchain
           cp -R "$BOOTCHAIN_DIR"/* artifact/bootchain/
           
           cat > artifact/BUILD-INFO.txt << EOF
-          Device: $DEVICE_NAME
-          ProductType: $DEVICE_PRODUCT
-          BoardConfig: $DEVICE_BOARD
-          CPID: $DEVICE_CPID
-          Chip: $DEVICE_CHIP
-          Build: $RESOLVED_BUILD
-          Source: $SOURCE_LABEL
+          Device: iPhone 11
+          ProductType: iPhone12,1
+          BoardConfig: N104AP
+          CPID: 0x8030
+          Chip: A13 / T8030
+          Build: ${{ github.event.inputs.ios_version }}
           Kernel: ${{ github.event.inputs.kernel }}
-          KPF-set: ${{ github.event.inputs.kpf_set }}
           With-FW: ${{ github.event.inputs.with_fw }}
           Runner: macos-15
           Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -373,19 +255,19 @@ jobs:
           
           echo "${{ github.sha }}" > artifact/source-commit.txt
           
-          tar -czf "${DEVICE_SLUG}-ramdisk.tar.gz" -C artifact .
+          tar -czf iphone11-a13-ramdisk.tar.gz -C artifact .
           
           echo "=== Final artifact ==="
           find artifact -type f
-          du -ah artifact "${DEVICE_SLUG}-ramdisk.tar.gz"
+          du -ah artifact iphone11-a13-ramdisk.tar.gz
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.DEVICE_SLUG }}-ramdisk-${{ env.RESOLVED_BUILD_ID }}
+          name: iphone11-a13-ramdisk-${{ github.event.inputs.ios_version }}
           path: |
             artifact/
-            ${{ env.DEVICE_SLUG }}-ramdisk.tar.gz
+            iphone11-a13-ramdisk.tar.gz
           if-no-files-found: error
 
       - name: Restore original files
