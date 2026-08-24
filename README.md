@@ -59,10 +59,14 @@ Expected output should confirm `MODE: DFU` and `PWND: usbliter8`.
 # 1. Install Linux runtime dependencies & udev rules
 ./setup-linux.sh --install --install-udev
 
-# 2. Check connected device and artifact status
+# 2. Install Python requirements
+pip install -r requirements.txt
+# or: ./requirements.sh
+
+# 3. Check connected device and artifact status
 ./status.sh
 
-# 3. Boot pwned DFU device into Ramdisk
+# 4. Boot pwned DFU device into Ramdisk
 sudo ./boot.sh --debug --with-fw
 ```
 
@@ -96,9 +100,9 @@ Once booted into Ramdisk (the device displays the ICH ASCII art banner):
 ### Option 2: Manual connection
 
 ```bash
-# 1. On Linux, ensure usbmuxd runs with --no-preflight (-p) for ramdisk:
-sudo systemctl stop usbmuxd
-sudo usbmuxd -p -U usbmux
+# 1. On Linux, ensure usbmuxd runs with --no-preflight (-p) as root for ramdisk:
+sudo killall usbmuxd 2>/dev/null || sudo systemctl stop usbmuxd
+sudo usbmuxd -p -U root
 
 # 2. Forward SSH port
 iproxy 2222 22
@@ -128,6 +132,88 @@ mount_ich
 ./build.sh --build <BUILD> --with-fw --kpf-set ios26   # Byte table
 ./build.sh --build <BUILD> --with-fw --kernel stock    # Stock kernel (no patches)
 ```
+
+---
+
+## 🔧 Troubleshooting & Common Errors
+
+### 1. SSH Connection Reset (`kex_exchange_identification: read: Connection reset by peer`)
+- **Cause:** `usbmuxd` is not running with `--no-preflight` (`-p`), was started as an unprivileged user without permission on the `/dev/bus/usb/` node, or has not detected the ramdisk device yet.
+- **Fix:**
+  ```bash
+  # 1. Stop any running usbmuxd instance
+  sudo killall usbmuxd 2>/dev/null || sudo systemctl stop usbmuxd
+
+  # 2. Start usbmuxd as root in no-preflight mode
+  sudo usbmuxd -p -U root
+
+  # 3. Verify device detection (should list your device UDID)
+  idevice_id -l
+
+  # 4. Connect via SSH
+  ./ssh.sh
+  ```
+
+---
+
+### 2. `usbmuxd: command not found` / `Unit usbmuxd.service not loaded`
+- **Cause:** The `usbmuxd` package is not installed on the host machine.
+- **Fix:**
+  - **Arch / CachyOS / Manjaro:**
+    ```bash
+    sudo pacman -S --needed usbmuxd libusbmuxd libimobiledevice sshpass
+    ```
+  - **Debian / Ubuntu / Mint:**
+    ```bash
+    sudo apt-get update && sudo apt-get install -y usbmuxd libusbmuxd-tools libimobiledevice-utils sshpass
+    ```
+  - Or run `./setup-linux.sh --install`.
+
+---
+
+### 3. `Error creating socket for listen port 2222: Address already in use`
+- **Cause:** A previous background `iproxy` process is still bound to port `2222`.
+- **Fix:**
+  ```bash
+  pkill -9 -f "iproxy"
+  ```
+
+---
+
+### 4. Python Module Missing (`MISS PyUSB module`, `No module named 'pyimg4'`, etc.)
+- **Cause:** Python dependencies are not installed in your current environment or virtual environment.
+- **Fix:**
+  ```bash
+  pip install -r requirements.txt
+  # or: ./requirements.sh
+  ```
+
+---
+
+### 5. `MISS usbliter8ctl (set USBLITER8CTL=/path/to/usbliter8ctl)`
+- **Cause:** `usbliter8ctl` is not in the default lookup paths.
+- **Fix:**
+  ```bash
+  # Option A: Place usbliter8ctl in tools/linux/
+  mkdir -p tools/linux
+  cp /path/to/usbliter8ctl tools/linux/usbliter8ctl
+  chmod +x tools/linux/usbliter8ctl
+
+  # Option B: Export the path
+  export USBLITER8CTL="/path/to/usbliter8ctl"
+  ```
+
+---
+
+### 6. USB Permissions / Device Not Detected (Linux)
+- **Cause:** Missing or un-reloaded udev rules for Apple DFU/Recovery modes.
+- **Fix:**
+  ```bash
+  ./setup-linux.sh --install-udev
+  # Or manually:
+  sudo install -Dm0644 udev/39-ich-apple-recovery.rules /etc/udev/rules.d/39-ich-apple-recovery.rules
+  sudo udevadm control --reload-rules && sudo udevadm trigger
+  ```
 
 ---
 

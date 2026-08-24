@@ -1,4 +1,5 @@
 #!/bin/bash
-python -m venv 
-source venv/bin/activate
-python3 -m pip install "pyimg4>=0.8" "capstone>=5.0" "Pillow>=10.0"
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+python3 -m pip install -r "$ROOT/requirements.txt"
+

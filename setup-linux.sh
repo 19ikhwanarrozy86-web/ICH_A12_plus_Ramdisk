@@ -49,10 +49,10 @@ case "$DISTRO_ID" in
         MANAGER=pacman
         # libirecovery is not consistently packaged in Arch's official repos.
         # Install only known repository packages; report the official source path below.
-        PACKAGES=(libusb python-pyusb)
+        PACKAGES=(libusb python-pyusb usbmuxd libusbmuxd libimobiledevice sshpass)
         IRECOVERY_NOTE='Install libirecovery from its official source (or a trusted package) so irecovery is on PATH.'
         ;;
-    debian|ubuntu|linuxmint|pop) MANAGER=apt; PACKAGES=(irecovery libusb-1.0-0 python3-usb) ;;
+    debian|ubuntu|linuxmint|pop) MANAGER=apt; PACKAGES=(irecovery libusb-1.0-0 python3-usb usbmuxd libusbmuxd-tools libimobiledevice-utils sshpass) ;;
     *) MANAGER=none; PACKAGES=() ;;
 esac
 
@@ -62,7 +62,7 @@ command -v python3 >/dev/null && ok "$(python3 --version)" || miss 'python3'
 if command -v python3 >/dev/null && python3 -c 'import usb' >/dev/null 2>&1; then
     ok 'PyUSB module'
 else
-    miss 'PyUSB module (python3 -m pip install --user pyusb, or use distro package)'
+    miss 'PyUSB module (python3 -m pip install -r requirements.txt, or use distro package)'
 fi
 if command -v irecovery >/dev/null; then
     ok "irecovery: $(command -v irecovery)"
@@ -74,6 +74,16 @@ if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libusb-1.0; then
     ok "libusb: $(pkg-config --modversion libusb-1.0)"
 else
     warn 'libusb pkg-config metadata unavailable (runtime may still be installed)'
+fi
+if command -v usbmuxd >/dev/null; then
+    ok "usbmuxd: $(command -v usbmuxd)"
+else
+    warn 'usbmuxd not found (required for SSH/USB multiplexing; run with --install)'
+fi
+if command -v iproxy >/dev/null; then
+    ok "iproxy: $(command -v iproxy)"
+else
+    warn 'iproxy not found (required for ./ssh.sh; install libusbmuxd)'
 fi
 
 USBLITER8CTL="${USBLITER8CTL:-}"
@@ -112,6 +122,9 @@ if ((INSTALL)); then
             exit 1
             ;;
     esac
+    if [[ -f "$ROOT/requirements.txt" ]] && command -v python3 >/dev/null 2>&1; then
+        python3 -m pip install -r "$ROOT/requirements.txt" 2>/dev/null || true
+    fi
 fi
 if ((INSTALL_UDEV)); then
     [[ -d /run/udev || -d /etc/udev ]] || { printf 'udev is not available on this system.\n' >&2; exit 1; }

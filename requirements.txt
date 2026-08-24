@@ -1,0 +1,4 @@
+pyusb>=1.2.1
+pyimg4>=0.8.8
+capstone>=5.0.0
+Pillow>=10.0.0

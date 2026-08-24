@@ -12,15 +12,15 @@ printf '  ICH_A12+ Ramdisk SSH Connector\n'
 printf '============================================================\n'
 
 # 1. Kill stale iproxy instances to ensure a fresh connection
-killall iproxy 2>/dev/null || true
+pkill -9 -f "iproxy" 2>/dev/null || true
 
 # 2. Check if usbmuxd sees any device
 if command -v idevice_id >/dev/null 2>&1; then
     DEV_COUNT="$(idevice_id -l 2>/dev/null | wc -l || echo 0)"
     if [[ "$DEV_COUNT" -eq 0 ]]; then
-        printf '[*] Note: If usbmuxd does not detect the ramdisk, restart usbmuxd with --no-preflight:\n'
-        printf '    sudo systemctl stop usbmuxd\n'
-        printf '    sudo usbmuxd -p -U usbmux\n\n'
+        printf '[*] Note: If usbmuxd does not detect the ramdisk, restart usbmuxd with --no-preflight as root:\n'
+        printf '    sudo killall usbmuxd 2>/dev/null || true\n'
+        printf '    sudo usbmuxd -p -U root\n\n'
     fi
 fi
 

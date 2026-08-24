@@ -1,8 +1,9 @@
 # Permit the active local user to access only Apple DFU, Recovery, and PongoOS
 # interfaces. TAG+=uaccess delegates access through logind; it avoids world-writable USB.
-SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="1227", TAG+="uaccess"
-SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="1281", TAG+="uaccess"
-SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="4141", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="1227", TAG+="uaccess", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="1281", TAG+="uaccess", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="4141", TAG+="uaccess", MODE="0666"
 # The ramdisk reaches this normal iPhone USB interface after bootx; usbmuxd and
 # iproxy need the same user-session access in order to expose SSH.
-SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="12a8", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="12a8", TAG+="uaccess", MODE="0666"
+

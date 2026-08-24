@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+
+import argparse
+import re
+import struct
+import sys
+import time
+from pathlib import Path
+import usb
+
+DFU_DNLOAD      = 1
+DFU_ABORT       = 6
+CUSTOM_DEMOTE   = 7
+CUSTOM_BOOT     = 8
+CUSTOM_AES_GID  = 9
+CUSTOM_TEST     = 10
+CUSTOM_READ     = 11
+CUSTOM_WRITE    = 12
+
+PONGO_VID       = 0x05AC
+PONGO_PID       = 0x4141
+
+TRANSFER_SIZE   = 0x800
+MAX_READ_CHUNK  = 0x800
+
+CHIP_NAMES = {'8020': 'A12', '8030': 'A13', '8006': 'S4/S5', '8027': 'A12X/Z'}
+
+# ══════════════════════════════════════════════════════════
+# Device helpers
+# ══════════════════════════════════════════════════════════
+
+def find_dfu():
+    dev = usb.core.find(idVendor=0x05AC, idProduct=0x1227)
+    if not dev:
+        raise RuntimeError("no DFU device found")
+    return dev
+
+def open_pwnd():
+    dev = find_dfu()
+    sn = dev.serial_number
+    if "PWND:[" not in sn:
+        raise RuntimeError("device is not in Pwned DFU mode")
+    return dev
+
+def parse_serial(serial):
+    fields = {}
+    for m in re.finditer(r'(\w+):(\[?[\w\.\-]+\]?)', serial):
+        fields[m.group(1)] = m.group(2)
+    fields['pwnd'] = 'PWND' in serial
+    return fields
+
+def download(dev, buf):
+    offset = 0
+    left = len(buf)
+    while left:
+        chunk = min(TRANSFER_SIZE, left)
+        dev.ctrl_transfer(0x21, DFU_DNLOAD, 0, 0, buf[offset:offset+chunk], 5000)
+        offset += chunk
+        left -= chunk
+        print(f"\rsent 0x{offset:x} / 0x{len(buf):x}", end="", flush=True)
+    print()
+    dev.ctrl_transfer(0x21, DFU_DNLOAD, 0, 0, None, 1000)
+
+# ══════════════════════════════════════════════════════════
+# Address encoding for read/write
+# ══════════════════════════════════════════════════════════
+
+def _set_addr_high(dev, high16):
+    dev.ctrl_transfer(0x21, CUSTOM_WRITE, 0xFFFF, 0xFFFF,
+                      struct.pack("<H", high16), 1000)
+
+def _addr_parts(addr):
+    high16 = (addr >> 32) & 0xFFFF
+    wValue = (addr >> 16) & 0xFFFF
+    wIndex = addr & 0xFFFF
+    return high16, wValue, wIndex
+
+def mem_read(dev, addr, size):
+    result = bytearray()
+    high16, _, _ = _addr_parts(addr)
+    _set_addr_high(dev, high16)
+
+    offset = 0
+    while offset < size:
+        chunk = min(MAX_READ_CHUNK, size - offset)
+        cur_addr = addr + offset
+        _, wValue, wIndex = _addr_parts(cur_addr)
+        cur_high = (cur_addr >> 32) & 0xFFFF
+        if cur_high != high16:
+            high16 = cur_high
+            _set_addr_high(dev, high16)
+
+        data = dev.ctrl_transfer(0xA1, CUSTOM_READ, wValue, wIndex, chunk, 5000)
+        result.extend(bytes(data))
+        offset += len(data)
+        if len(data) < chunk:
+            break
+    return bytes(result)
+
+def mem_write(dev, addr, data):
+    high16, _, _ = _addr_parts(addr)
+    _set_addr_high(dev, high16)
+
+    offset = 0
+    while offset < len(data):
+        chunk = min(MAX_READ_CHUNK, len(data) - offset)
+        cur_addr = addr + offset
+        _, wValue, wIndex = _addr_parts(cur_addr)
+        cur_high = (cur_addr >> 32) & 0xFFFF
+        if cur_high != high16:
+            high16 = cur_high
+            _set_addr_high(dev, high16)
+
+        dev.ctrl_transfer(0x21, CUSTOM_WRITE, wValue, wIndex,
+                          data[offset:offset+chunk], 5000)
+        offset += chunk
+    return offset
+
+# ══════════════════════════════════════════════════════════
+# Hexdump
+# ══════════════════════════════════════════════════════════
+
+def hexdump(data, base_addr=0):
+    for i in range(0, len(data), 16):
+        row = data[i:i+16]
+        hex_part = " ".join(f"{b:02x}" for b in row)
+        ascii_part = "".join(chr(b) if 0x20 <= b < 0x7f else "." for b in row)
+        addr = base_addr + i
+        print(f"{addr:016x}  {hex_part:<48s}  |{ascii_part}|")
+
+# ══════════════════════════════════════════════════════════
+# Commands
+# ══════════════════════════════════════════════════════════
+
+def do_serial(args):
+    dev = find_dfu()
+    sn = dev.serial_number
+    f = parse_serial(sn)
+    cpid = f.get('CPID', '?')
+    print(f"CPID:{cpid} CPRV:{f.get('CPRV','?')} CPFM:{f.get('CPFM','?')} "
+          f"SCEP:{f.get('SCEP','?')} BDID:{f.get('BDID','?')} "
+          f"ECID:{f.get('ECID','?')} IBFL:{f.get('IBFL','?')} "
+          f"SRTG:{f.get('SRTG','?')} "
+          f"{'PWND:[usbliter8]' if f.get('pwnd') else ''}")
+
+def do_info(args):
+    dev = find_dfu()
+    sn = dev.serial_number
+    f = parse_serial(sn)
+    cpid = f.get('CPID', '?')
+
+    ibfl = int(f.get('IBFL', '0'), 16) if f.get('IBFL') else 0
+
+    print(f"Serial: {sn}")
+    print()
+    print(f"  CPID:  {cpid} ({CHIP_NAMES.get(cpid, 'unknown')})")
+    print(f"  CPRV:  {f.get('CPRV', '?')}")
+    print(f"  CPFM:  {f.get('CPFM', '?')}")
+    print(f"  SCEP:  {f.get('SCEP', '?')}")
+    print(f"  BDID:  {f.get('BDID', '?')}")
+    print(f"  ECID:  {f.get('ECID', '?')}")
+    print(f"  IBFL:  {f.get('IBFL', '?')}")
+    print(f"  SRTG:  {f.get('SRTG', '?')}")
+    print(f"  PWND:  {'YES' if f.get('pwnd') else 'NO'}")
+    print()
+    print(f"  --- Decoded IBFL (0x{ibfl:02X}) ---")
+    print(f"  [{'SET' if ibfl & 0x01 else '   '}] bit 0x01  Development fuses blown")
+    print(f"  [{'SET' if ibfl & 0x02 else '   '}] bit 0x02  Production fuses blown")
+    print(f"  [{'SET' if ibfl & 0x04 else '   '}] bit 0x04  Secure boot enabled")
+    print(f"  [{'SET' if ibfl & 0x08 else '   '}] bit 0x08  Effective production mode")
+    print(f"  [{'SET' if ibfl & 0x10 else '   '}] bit 0x10  JTAG disabled")
+    print(f"  [{'SET' if ibfl & 0x20 else '   '}] bit 0x20  Demotion supported")
+    print(f"  [{'SET' if ibfl & 0x40 else '   '}] bit 0x40  Secure enclave present")
+
+def do_test(args):
+    dev = open_pwnd()
+    result = dev.ctrl_transfer(0xA1, CUSTOM_TEST, 0, 0, 64, 1000)
+    text = bytes(result).split(b'\x00')[0].decode('ascii', errors='replace')
+    if text == "usbliter8":
+        print("protocol OK")
+    else:
+        print(f"protocol FAIL (got: {text!r})")
+
+def do_demote(args):
+    dev = open_pwnd()
+    dev.ctrl_transfer(0x21, CUSTOM_DEMOTE, 0, 0, None, 1000)
+    print("Demoted (temporary until reboot)")
+
+def do_boot(args):
+    data = args.iboot.read_bytes()
+    print(f"Image: {args.iboot.name} ({len(data)} bytes)")
+    dev = open_pwnd()
+    download(dev, data)
+    dev.ctrl_transfer(0x21, CUSTOM_BOOT, 0, 0, None, 1000)
+    try:
+        dev.ctrl_transfer(0x21, DFU_ABORT, 0, 0, None, 1000)
+    except usb.core.USBError:
+        pass
+    print("Boot triggered")
+
+def do_read(args):
+    addr = int(args.addr, 0)
+    size = int(args.size, 0)
+    dev = open_pwnd()
+    data = mem_read(dev, addr, size)
+    hexdump(data, addr)
+
+def do_write(args):
+    addr = int(args.addr, 0)
+    data = bytes.fromhex(args.data.replace(" ", ""))
+    dev = open_pwnd()
+    written = mem_write(dev, addr, data)
+    print(f"Wrote {written} bytes to 0x{addr:x}")
+
+def do_dump(args):
+    dev = open_pwnd()
+
+    regions = {
+        'securerom': (0x100000000, 0x30000,  'securerom_t8030.bin'),
+        'sram':      (0x19C000000, 0x40000,  'sram_dump.bin'),
+        'sram_full': (0x19C000000, 0x400000, 'sram_full.bin'),
+    }
+
+    name = args.region
+    if name not in regions:
+        addr = int(args.region, 0) if args.region.startswith('0x') else None
+        if addr is None:
+            print(f"Unknown region. Available: {', '.join(regions.keys())}")
+            print("Or specify hex address: dump 0x100000000 0x30000")
+            return
+        size = int(args.size, 0) if args.size else 0x1000
+        outfile = args.output or f"dump_{addr:x}.bin"
+        regions[name] = (addr, size, outfile)
+
+    addr, size, default_out = regions[name]
+    outfile = args.output or default_out
+
+    print(f"Dumping 0x{addr:x} + 0x{size:x} ({size} bytes)...")
+
+    result = bytearray()
+    chunk_size = MAX_READ_CHUNK
+    for offset in range(0, size, chunk_size):
+        cur_size = min(chunk_size, size - offset)
+        chunk = mem_read(dev, addr + offset, cur_size)
+        result.extend(chunk)
+        pct = (offset + len(chunk)) * 100 // size
+        print(f"\r  [{pct:3d}%] 0x{offset + len(chunk):x} / 0x{size:x}", end="", flush=True)
+    print()
+
+    Path(outfile).write_bytes(bytes(result))
+    print(f"Saved to {outfile} ({len(result)} bytes)")
+
+def do_kbag(args):
+    dev = open_pwnd()
+    kbag_hex = args.kbag.replace(" ", "")
+    if len(kbag_hex) != 96:
+        raise RuntimeError("KBAG must be 48 bytes (96 hex chars): 16 IV + 32 KEY")
+    kbag_bytes = bytes.fromhex(kbag_hex)
+    dev.ctrl_transfer(0x21, CUSTOM_AES_GID, 0, 0, kbag_bytes, 1000)
+    result = dev.ctrl_transfer(0xA1, CUSTOM_AES_GID, 0, 0, 48, 1000)
+    result_bytes = bytes(result)
+    iv  = result_bytes[:16].hex()
+    key = result_bytes[16:].hex()
+    print(f"IV:  {iv}")
+    print(f"KEY: {key}")
+
+def do_pongo(args):
+    print("Waiting for PongoOS device (05AC:4141)...")
+    deadline = time.time() + 30
+    dev = None
+    while time.time() < deadline:
+        dev = usb.core.find(idVendor=PONGO_VID, idProduct=PONGO_PID)
+        if dev:
+            break
+        time.sleep(0.5)
+    if not dev:
+        raise RuntimeError("PongoOS device not found (timeout)")
+
+    print("Connected to PongoOS!")
+    dev.set_configuration()
+
+    def send_cmd(cmd):
+        cmd_buf = (cmd + "\n").encode()
+        dev.ctrl_transfer(0x21, 4, 1, 0, None, 1000)
+        dev.ctrl_transfer(0x21, 3, 0, 0, cmd_buf, 1000)
+        in_progress = 1
+        while in_progress:
+            try:
+                status = dev.ctrl_transfer(0xa1, 2, 0, 0, 1, 1000)
+                in_progress = status[0] if status else 0
+                data = dev.ctrl_transfer(0xa1, 1, 0, 0, 0x1000, 1000)
+                if data:
+                    sys.stdout.write(bytes(data).decode('utf-8', errors='replace'))
+            except usb.core.USBError:
+                break
+
+    print("Interactive PongoOS shell (Ctrl+C to exit):")
+    try:
+        while True:
+            cmd = input("pongoOS> ")
+            if cmd.strip():
+                send_cmd(cmd.strip())
+    except (KeyboardInterrupt, EOFError):
+        print()
+
+# ══════════════════════════════════════════════════════════
+# Main
+# ══════════════════════════════════════════════════════════
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="usbliter8ctl — A12/A13 SecureROM exploit control tool",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s serial                       Print DFU serial string
+  %(prog)s info                         Detailed device info with IBFL decode
+  %(prog)s test                         Verify custom handler is active
+  %(prog)s demote                       Demote production mode
+  %(prog)s boot Pongo.bin               Boot raw image
+  %(prog)s read 0x100000200 0x20        Read 32 bytes from SecureROM
+  %(prog)s write 0x19C000000 41424344   Write bytes to SRAM
+  %(prog)s dump securerom               Dump full SecureROM (192KB)
+  %(prog)s dump sram                    Dump SRAM (256KB)
+  %(prog)s dump 0x100000000 0x30000     Dump custom region
+  %(prog)s kbag <96 hex chars>          Decrypt KBAG via GID key
+  %(prog)s pongo                        Interactive PongoOS shell
+"""
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("serial", help="print DFU serial number")
+    sub.add_parser("info", help="detailed device info")
+    sub.add_parser("test", help="verify custom handler protocol")
+    sub.add_parser("demote", help="demote production mode")
+
+    p = sub.add_parser("boot", help="boot raw iBoot/PongoOS image")
+    p.add_argument("iboot", type=Path)
+
+    p = sub.add_parser("read", help="read device memory")
+    p.add_argument("addr", help="address (hex)")
+    p.add_argument("size", help="bytes to read (hex)")
+
+    p = sub.add_parser("write", help="write device memory")
+    p.add_argument("addr", help="address (hex)")
+    p.add_argument("data", help="hex bytes to write")
+
+    p = sub.add_parser("dump", help="dump memory region to file")
+    p.add_argument("region", help="securerom | sram | sram_full | 0xADDR")
+    p.add_argument("size", nargs="?", help="size (hex, for custom addr)")
+    p.add_argument("-o", "--output", help="output filename")
+
+    p = sub.add_parser("kbag", help="decrypt KBAG via GID AES key")
+    p.add_argument("kbag", help="96 hex chars (48 bytes)")
+
+    sub.add_parser("pongo", help="interactive PongoOS shell")
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        exit(1)
+
+    cmds = {
+        "serial": do_serial, "info": do_info, "test": do_test,
+        "demote": do_demote, "boot": do_boot, "read": do_read,
+        "write": do_write, "dump": do_dump, "kbag": do_kbag,
+        "pongo": do_pongo,
+    }
+    cmds[args.command](args)
+
+if __name__ == "__main__":
+    main()
