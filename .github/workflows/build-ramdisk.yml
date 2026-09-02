@@ -211,8 +211,7 @@ jobs:
           echo "Kernel: ${{ github.event.inputs.kernel }}"
           echo "With-FW: ${{ github.event.inputs.with_fw }}"
           echo "==========================="
-          
-          ./build.sh $ARGS
+          ./build.sh $ARGS --kpf-set ios26
 
       - name: Inspect bootchain
         run: |
