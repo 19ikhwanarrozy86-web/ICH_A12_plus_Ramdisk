@@ -216,14 +216,24 @@ jobs:
           mkdir -p artifact/bootchain
           cp -R "$BOOTCHAIN_DIR"/* artifact/bootchain/
           
-          echo "=== Mengoptimalkan ukuran komponen sebelum di-zip ==="
+          # [SANGAT PENTING] Membersihkan File Sampah & Hanya Mengambil File Utama Pembuat Booting SSH Ramdisk
+          echo "=== Membersihkan file yang tidak digunakan untuk mengecilkan ukuran artifact ==="
+          
+          # 1. Aturan penghapusan duplikasi Kernel berdasarkan pilihan input user
           if [[ "${{ github.event.inputs.kernel }}" == "patched" ]]; then
             rm -f artifact/bootchain/kernelcache.img4.stock
-            echo "-> Berhasil menghapus kernel stock yang tidak terpakai"
+            echo "-> Menghapus kernel stock karena Anda menggunakan mode patched"
           else
             rm -f artifact/bootchain/kernelcache.img4.patched
-            echo "-> Berhasil menghapus kernel patched yang tidak terpakai"
+            echo "-> Menghapus kernel patched karena Anda menggunakan mode stock"
           fi
+          
+          # 2. Menghapus file log konfigurasi dan status perantara internal dari sistem build.sh lokal
+          rm -f artifact/bootchain/kernel.mode
+          rm -f artifact/bootchain/kpf.set
+          rm -f artifact/bootchain/use-ibss
+          rm -f artifact/bootchain/with-fw.enabled
+          rm -f artifact/bootchain/live-data.enabled
           
           cat > artifact/BUILD-INFO.txt << EOF
           Device: iPhone 11
@@ -244,7 +254,7 @@ jobs:
           
           tar -czf iphone11-a13-ramdisk.tar.gz -C artifact .
           
-          echo "=== Final artifact ==="
+          echo "=== Berhasil Mengompres! Ringkasan isi file penting final ==="
           find artifact -type f
           du -ah artifact iphone11-a13-ramdisk.tar.gz
 
@@ -264,26 +274,28 @@ jobs:
             mv -f tools/darwin/irecovery.stock tools/darwin/irecovery
             echo "Restored original irecovery"
           fi
+          
+          # Eksekusi restorasi aman menggunakan JavaScript Node.js
           node -e '
-const { execSync } = require("child_process");
-const fs = require("fs");
-
-const script = `
-if [[ -f build.sh.bak ]]; then
-  mv -f build.sh.bak build.sh
-  echo "Restored original build.sh"
-fi
-if [[ -f env.sh.bak ]]; then
-  mv -f env.sh.bak env.sh
-  echo "Restored original env.sh"
-fi
-`;
-
-try {
-  console.log("=== Menjalankan Restorasi File via JavaScript ===");
-  execSync(script, { shell: "/bin/bash", stdio: "inherit" });
-} catch (error) {
-  console.error("Gagal merestorasi file:", error.message);
-  process.exit(1);
-}
-'
+          const { execSync } = require("child_process");
+          const fs = require("fs");
+          
+          const script = `
+          if [[ -f build.sh.bak ]]; then
+            mv -f build.sh.bak build.sh
+            echo "Restored original build.sh"
+          fi
+          if [[ -f env.sh.bak ]]; then
+            mv -f env.sh.bak env.sh
+            echo "Restored original env.sh"
+          fi
+          `;
+          
+          try {
+            console.log("=== Menjalankan Restorasi File via JavaScript ===");
+            execSync(script, { shell: "/bin/bash", stdio: "inherit" });
+          } catch (error) {
+            console.error("Gagal merestorasi file:", error.message);
+            process.exit(1);
+          }
+          '
