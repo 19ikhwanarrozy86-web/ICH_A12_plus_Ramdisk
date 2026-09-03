@@ -101,18 +101,6 @@ jobs:
           diff -u build.sh.bak build.sh || true
 
       - name: Patch env.sh so a CI venv actually gets used
-        # env.sh rebuilds PATH as:
-        #   /usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$NR_TOOLS:<inherited PATH>
-        # /usr/bin comes first, so every bare `python3` call inside build.sh (including
-        # the pyimg4-based wrap_kernel() heredoc) resolves to the system CLT/Homebrew
-        # python3, never to the venv from "Setup Python venv" above - no matter how that
-        # venv was activated before ./build.sh was invoked. That's exactly why the build
-        # fails with "ModuleNotFoundError: No module named 'pyimg4'" right after the
-        # AOP/ANE/AVE/ISP/GFX/SIO firmware is staged: it's the first bare `python3 <<EOF`
-        # call in build.sh that actually needs a third-party package instead of stdlib.
-        # Prepend $VIRTUAL_ENV/bin when a venv is active so build.sh picks it up; falls
-        # back to the original resolution order when no venv is active (unchanged
-        # behaviour for manual, non-CI runs).
         run: |
           set -e
           cp env.sh env.sh.bak
@@ -134,8 +122,6 @@ jobs:
       - name: Replace irecovery with CI shim
         run: |
           set -e
-          # build.sh uses $NR_TOOLS/irecovery (absolute path), not PATH.
-          # We must replace the actual binary temporarily.
           mv tools/darwin/irecovery tools/darwin/irecovery.stock
           cat > tools/darwin/irecovery << 'SHIM'
           #!/bin/bash
@@ -159,9 +145,6 @@ jobs:
           tools/darwin/irecovery -q
 
       - name: Pre-build debug — inspect BuildManifest
-        # Uses the ipsw CLI (parameterized by ios_version) instead of a hardcoded pzb
-        # URL, so this debug step reflects whatever build was actually selected for
-        # this run instead of always showing the 23F84 / iOS 26.5.2 manifest.
         run: |
           set +e
           source .venv/bin/activate
@@ -190,10 +173,6 @@ jobs:
       - name: Build bootchain
         run: |
           set -e
-          # Now that env.sh (patched above) prepends $VIRTUAL_ENV/bin ahead of system
-          # python3, activating the venv here actually determines which python3
-          # build.sh's internal `python3 <<EOF` calls (e.g. wrap_kernel's pyimg4 use)
-          # will resolve to.
           source .venv/bin/activate
           export PATH="$(pwd)/.venv/bin:$PATH"
 
@@ -237,6 +216,15 @@ jobs:
           mkdir -p artifact/bootchain
           cp -R "$BOOTCHAIN_DIR"/* artifact/bootchain/
           
+          echo "=== Mengoptimalkan ukuran komponen sebelum di-zip ==="
+          if [[ "${{ github.event.inputs.kernel }}" == "patched" ]]; then
+            rm -f artifact/bootchain/kernelcache.img4.stock
+            echo "-> Berhasil menghapus kernel stock yang tidak terpakai"
+          else
+            rm -f artifact/bootchain/kernelcache.img4.patched
+            echo "-> Berhasil menghapus kernel patched yang tidak terpakai"
+          fi
+          
           cat > artifact/BUILD-INFO.txt << EOF
           Device: iPhone 11
           ProductType: iPhone12,1
@@ -272,18 +260,30 @@ jobs:
       - name: Restore original files
         if: always()
         run: |
-          # Restore original irecovery
           if [[ -f tools/darwin/irecovery.stock ]]; then
             mv -f tools/darwin/irecovery.stock tools/darwin/irecovery
             echo "Restored original irecovery"
           fi
-          # Restore original build.sh
-          if [[ -f build.sh.bak ]]; then
-            mv -f build.sh.bak build.sh
-            echo "Restored original build.sh"
-          fi
-          # Restore original env.sh
-          if [[ -f env.sh.bak ]]; then
-            mv -f env.sh.bak env.sh
-            echo "Restored original env.sh"
-          fi
+          node -e '
+const { execSync } = require("child_process");
+const fs = require("fs");
+
+const script = `
+if [[ -f build.sh.bak ]]; then
+  mv -f build.sh.bak build.sh
+  echo "Restored original build.sh"
+fi
+if [[ -f env.sh.bak ]]; then
+  mv -f env.sh.bak env.sh
+  echo "Restored original env.sh"
+fi
+`;
+
+try {
+  console.log("=== Menjalankan Restorasi File via JavaScript ===");
+  execSync(script, { shell: "/bin/bash", stdio: "inherit" });
+} catch (error) {
+  console.error("Gagal merestorasi file:", error.message);
+  process.exit(1);
+}
+'
