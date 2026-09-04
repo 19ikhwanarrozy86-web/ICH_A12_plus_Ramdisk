@@ -192,17 +192,7 @@ jobs:
           echo "==========================="
           ./build.sh $ARGS --kpf-set ios26
 
-      - name: Inspect bootchain
-        run: |
-          set -e
-          echo "=== Bootchain files ==="
-          find bootchain -type f -print
-          echo "=== Bootchain sizes ==="
-          du -ah bootchain
-          echo "=== chain.info ==="
-          cat bootchain/*/chain.info || true
-
-       - name: Package artifact
+      - name: Package artifact
         run: |
           set -e
           BOOTCHAIN_DIR=$(find bootchain -maxdepth 1 -type d | tail -n +2 | head -1)
@@ -211,12 +201,9 @@ jobs:
             exit 1
           fi
           
-          # Membuat folder bersih untuk hasil akhir
           mkdir -p artifact/
-          
           echo "=== Menyalin & Otomatis Mengubah Nama 4 File Utama Ramdisk ==="
           
-          # 1. Mengambil iBoot Patched dan diubah menjadi ib.bin
           if [[ -f "$BOOTCHAIN_DIR/iBoot.patched.bin" ]]; then
             cp "$BOOTCHAIN_DIR/iBoot.patched.bin" artifact/ib.bin
             echo "[+] Sukses: iBoot -> ib.bin"
@@ -225,7 +212,6 @@ jobs:
             exit 1
           fi
           
-          # 2. Mengambil DeviceTree dan diubah menjadi dt.img4
           if [[ -f "$BOOTCHAIN_DIR/devicetree.img4" ]]; then
             cp "$BOOTCHAIN_DIR/devicetree.img4" artifact/dt.img4
             echo "[+] Sukses: devicetree -> dt.img4"
@@ -234,7 +220,6 @@ jobs:
             exit 1
           fi
           
-          # 3. Mengambil Ramdisk dan diubah menjadi rd.img4
           if [[ -f "$BOOTCHAIN_DIR/ramdisk.img4" ]]; then
             cp "$BOOTCHAIN_DIR/ramdisk.img4" artifact/rd.img4
             echo "[+] Sukses: ramdisk -> rd.img4"
@@ -243,7 +228,6 @@ jobs:
             exit 1
           fi
           
-          # 4. Mengambil Kernelcache Patched dan diubah menjadi kc.img4
           if [[ -f "$BOOTCHAIN_DIR/kernelcache.img4.patched" ]]; then
             cp "$BOOTCHAIN_DIR/kernelcache.img4.patched" artifact/kc.img4
             echo "[+] Sukses: kernelcache.patched -> kc.img4"
@@ -255,21 +239,13 @@ jobs:
             exit 1
           fi
           
-          # Membuat catatan ringkas info build
           cat > artifact/BUILD-INFO.txt << EOF
           Device: iPhone 11 (A13)
           Build: ${{ github.event.inputs.ios_version }}
           Status: Cleaned & Renamed for OkeRamdisk Tool
-          Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
           EOF
           
-          # Mengompres folder artifact menjadi file .tar.gz yang sangat kecil
           tar -czf iphone11-a13-ramdisk.tar.gz -C artifact .
-          
-          echo "=== RINGKASAN FILE FINAL DI DALAM ARTIFACT ==="
-          find artifact -type f
-          du -ah iphone11-a13-ramdisk.tar.gz
-
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -287,28 +263,3 @@ jobs:
             mv -f tools/darwin/irecovery.stock tools/darwin/irecovery
             echo "Restored original irecovery"
           fi
-          
-          # Eksekusi restorasi aman menggunakan JavaScript Node.js
-          node -e '
-          const { execSync } = require("child_process");
-          const fs = require("fs");
-          
-          const script = `
-          if [[ -f build.sh.bak ]]; then
-            mv -f build.sh.bak build.sh
-            echo "Restored original build.sh"
-          fi
-          if [[ -f env.sh.bak ]]; then
-            mv -f env.sh.bak env.sh
-            echo "Restored original env.sh"
-          fi
-          `;
-          
-          try {
-            console.log("=== Menjalankan Restorasi File via JavaScript ===");
-            execSync(script, { shell: "/bin/bash", stdio: "inherit" });
-          } catch (error) {
-            console.error("Gagal merestorasi file:", error.message);
-            process.exit(1);
-          }
-          '
