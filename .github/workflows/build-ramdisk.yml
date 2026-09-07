@@ -21,6 +21,7 @@ on:
         required: true
         default: true
         type: boolean
+
 jobs:
   build:
     runs-on: macos-15
