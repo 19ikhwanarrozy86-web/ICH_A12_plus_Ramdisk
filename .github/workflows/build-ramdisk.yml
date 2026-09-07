@@ -21,15 +21,12 @@ on:
         required: true
         default: true
         type: boolean
-
 jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Show environment
         run: |
           echo "=== macOS Version ==="
@@ -38,7 +35,6 @@ jobs:
           uname -m
           echo "=== PATH ==="
           tr ':' '\n' <<< "$PATH"
-
       - name: Install system dependencies
         run: |
           set -e
