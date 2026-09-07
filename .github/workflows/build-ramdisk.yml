@@ -38,6 +38,7 @@ jobs:
           uname -m
           echo "=== PATH ==="
           tr ':' '\n' <<< "$PATH"
+
       - name: Install system dependencies
         run: |
           set -e
@@ -191,47 +192,7 @@ jobs:
           echo "==========================="
           ./build.sh $ARGS --kpf-set ios26
 
-      - name: Extract missing WCH firmware from Apple via ipsw
-        run: |
-          set -e
-          BOOTCHAIN_DIR=$(find bootchain -maxdepth 1 -type d | tail -n +2 | head -1)
-          if [[ -z "$BOOTCHAIN_DIR" ]]; then
-            echo "ERROR: No bootchain directory found to injection" >&2
-            exit 1
-          fi
-
-          echo "=== Mencari URL IPSW Parsial untuk iPhone 11 ==="
-          mkdir -p /tmp/wch_extract
-          cd /tmp/wch_extract
-
-          # Unduh manifest parsial untuk melacak letak file WCH asli Apple tanpa unduh full IPSW
-          ipsw download ipsw --device iPhone12,1 --build "${{ github.event.inputs.ios_version }}" --build-manifest --output .
-          
-          if [[ -f BuildManifest.plist ]]; then
-            echo "[*] Mengekstrak file WCH.img4 resmi dari Apple Core Server..."
-            # Memanfaatkan perintah bawaan ipsw untuk mengambil file WCH.img4 dari kompresi dalam remote firmware
-            ipsw download ota --device iPhone12,1 --build "${{ github.event.inputs.ios_version }}" -f "Firmware/all_flash/WCH.img4" --output . || true
-            
-            # Jika skrip OTA gagal, coba jalur ekstraksi IPSW Komponen Parsial
-            if [[ ! -f "WCH.img4" ]]; then
-               ipsw download ipsw --device iPhone12,1 --build "${{ github.event.inputs.ios_version }}" -f "Firmware/all_flash/WCH.img4" --output . || true
-            fi
-
-            # Pindahkan WCH yang berhasil ditarik ke dalam folder hasil build utama agar ikut terbungkus
-            if [[ -f "WCH.img4" ]]; then
-               cp WCH.img4 "$GITHUB_WORKSPACE/$BOOTCHAIN_DIR/WCH.img4"
-               echo "[+] SUKSES: WCH.img4 berhasil disuntikkan ke folder bootchain."
-            else
-               # Fallback membuat dummy placeholder jika server Apple menolak koneksi parsial, agar script tidak break
-               echo "WARNING: Gagal mendownload secara parsial. Membuat file kosong WCH.img4 sebagai penahan Error."
-               touch "$GITHUB_WORKSPACE/$BOOTCHAIN_DIR/WCH.img4"
-            fi
-          else
-            echo "WARNING: BuildManifest gagal dimuat, WCH dibuat kosong."
-            touch "$GITHUB_WORKSPACE/$BOOTCHAIN_DIR/WCH.img4"
-          fi
-          cd $GITHUB_WORKSPACE
-     - name: Package artifact
+      - name: Package artifact
         run: |
           set -e
           BOOTCHAIN_DIR=$(find bootchain -maxdepth 1 -type d | tail -n +2 | head -1)
@@ -277,15 +238,6 @@ jobs:
             echo "[-] ERROR: kernelcache tidak ditemukan!" >&2
             exit 1
           fi
-          
-          # MENYALIN SEMUA FILE FIRMWARE SEPERTI REVISI SEBELUMNYA TERMASUK WCH YANG BARU DIUNDUH
-          echo "=== Menyalin Semua Berkas Firmware Pendukung Termasuk WCH ==="
-          for extra_file in PMP.img4 WCH.img4 ANE.img4 AOP.img4 AVE.img4 GFX.img4 ISP.img4 SIO.img4 trustcache.img4 sep-firmware.img4; do
-            if [[ -f "$BOOTCHAIN_DIR/$extra_file" ]]; then
-              cp "$BOOTCHAIN_DIR/$extra_file" artifact/
-              echo "[+] Sukses Menyalin Ekstra: $extra_file"
-            fi
-          done
           
           cat > artifact/BUILD-INFO.txt << EOF
           Device: iPhone 11 (A13)
