@@ -1,4 +1,4 @@
-name: Build A12 / A13 Oke Mbak
+name: Build A12 / A13 oke kakak
 
 on:
   workflow_dispatch:
