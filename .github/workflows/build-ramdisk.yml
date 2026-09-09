@@ -1,10 +1,10 @@
-nama: Build A12 / A13 Universal Complete Ramdisk
+name: Build A12 / A13 Universal Complete Ramdisk
 
-pada:
+on:
   workflow_dispatch:
-    masukan:
+    inputs:
       target_perangkat:
-        deskripsi: 'Perangkat Target / Chip SoC'
+        description: 'Perangkat Target / Chip SoC'
         required: true
         default: 'iphone11'
         type: choice
@@ -42,7 +42,7 @@ pada:
         default: true
         type: boolean
 
-pekerjaan:
+jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 45
