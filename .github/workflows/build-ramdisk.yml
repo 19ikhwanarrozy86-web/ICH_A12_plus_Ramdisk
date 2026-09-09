@@ -1,4 +1,4 @@
-name: Build A12 / A13 Complete Ramdisk
+name: Build A12 / A13 Universal Complete Ramdisk
 
 on:
   workflow_dispatch:
