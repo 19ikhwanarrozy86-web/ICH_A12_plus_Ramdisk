@@ -1,4 +1,4 @@
-name: Build A12 / A13 Okeramdisk OziKAK
+name: Build A12 / A13 Okeramdisk Ozi
 
 on:
   workflow_dispatch:
@@ -245,29 +245,20 @@ jobs:
           echo "With-FW: ${{ github.event.inputs.with_fw }}"
           echo "==========================="
           
-          # [SOLUSI AKURAT WCH]: Proses latar belakang untuk memaksa ekstraksi seluruh variasi nama chip daya nirkabel Apple
+          # [SOLUSI MUTLAK WCH]: Menjalankan pemantau latar belakang untuk menangkap berkas IPSW sebelum dihapus
           (
-            echo "=== Pemantau Chip Daya Latar Belakang Aktif ==="
-            for i in {1..35}; do
+            echo "=== Pemantau IPSW Latar Belakang Aktif ==="
+            for i in {1..30}; do
               IPSW_FILE=$(find . -maxdepth 2 -name "*.ipsw" | head -n 1)
               if [[ -f "$IPSW_FILE" ]]; then
-                echo "=== IPSW Terdeteksi: $IPSW_FILE. Mengekstrak komponen daya nirkabel... ==="
-                
-                # Mencoba ekstraksi dengan 3 variasi nama sirkuit resmi Apple (wch, chg, wep)
+                echo "=== IPSW Ditemukan: $IPSW_FILE. Mengekstrak WCH secara paksa... ==="
                 ipsw extract --coproc wch "$IPSW_FILE" 2>/dev/null || true
-                ipsw extract --coproc chg "$IPSW_FILE" 2>/dev/null || true
-                ipsw extract --coproc wep "$IPSW_FILE" 2>/dev/null || true
-                
-                # Melakukan pencarian jika ada file ekstraksi yang bernama lain lalu mengubah namanya ke WCH.img4
-                FOUND_WCH=$(find . -maxdepth 1 \( -name "*WCH*" -o -name "*Wch*" -o -name "*wch*" -o -name "*CHG*" -o -name "*chg*" -o -name "*WEP*" -o -name "*wep*" \) -name "*.img4")
-                if [[ -not -z "$FOUND_WCH" ]]; then
-                  echo "=== Komponen Daya Ditemukan: $FOUND_WCH ==="
-                  cp "$FOUND_WCH" WCH.img4 2>/dev/null || true
-                  echo "=== SUKSES: Berkas WCH.img4 Berhasil Diamankan! ==="
+                if [[ -f "WCH.img4" || -f "Wch.img4" || -f "WirelessPower.img4" ]]; then
+                  echo "=== SUKSES: Komponen WCH Berhasil Diekstrak! ==="
                   break
                 fi
               fi
-              sleep 15
+              sleep 20
             done
           ) &
           
@@ -286,7 +277,7 @@ jobs:
           
           mkdir -p artifact/bootchain
           
-          # Menyalin seluruh komponen mentah IMG4 dan BIN termasuk berkas WCH yang dipaksa keluar
+          # Menyalin komponen mentah IMG4 dan BIN termasuk file WCH yang diselamatkan pemantau
           echo "=== Saving all standalone coprocessor firmware files ==="
           cp -v *.img4 *.bin *.plist chain.info "$BOOTCHAIN_DIR"/ 2>/dev/null || true
           
