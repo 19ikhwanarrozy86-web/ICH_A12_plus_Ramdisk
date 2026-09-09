@@ -257,6 +257,7 @@ jobs:
           echo "=== chain.info ==="
           cat bootchain/*/chain.info || true
 
+
       - name: Package artifact
         run: |
           set -e
