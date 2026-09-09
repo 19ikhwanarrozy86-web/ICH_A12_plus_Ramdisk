@@ -245,17 +245,24 @@ jobs:
           echo "With-FW: ${{ github.event.inputs.with_fw }}"
           echo "==========================="
           
+          # [SOLUSI MUTLAK WCH]: Menjalankan pemantau latar belakang untuk menangkap berkas IPSW sebelum dihapus
+          (
+            echo "=== Pemantau IPSW Latar Belakang Aktif ==="
+            for i in {1..30}; do
+              IPSW_FILE=$(find . -maxdepth 2 -name "*.ipsw" | head -n 1)
+              if [[ -f "$IPSW_FILE" ]]; then
+                echo "=== IPSW Ditemukan: $IPSW_FILE. Mengekstrak WCH secara paksa... ==="
+                ipsw extract --coproc wch "$IPSW_FILE" 2>/dev/null || true
+                if [[ -f "WCH.img4" || -f "Wch.img4" || -f "WirelessPower.img4" ]]; then
+                  echo "=== SUKSES: Komponen WCH Berhasil Diekstrak! ==="
+                  break
+                fi
+              fi
+              sleep 20
+            done
+          ) &
+          
           ./build.sh $ARGS
-
-      - name: Inspect bootchain
-        run: |
-          set -e
-          echo "=== Bootchain files ==="
-          find bootchain -type f -print
-          echo "=== Bootchain sizes ==="
-          du -ah bootchain
-          echo "=== chain.info ==="
-          cat bootchain/*/chain.info || true
 
       - name: Package artifact
         run: |
@@ -268,23 +275,9 @@ jobs:
           BUILD_NAME=$(basename "$BOOTCHAIN_DIR")
           echo "BOOTCHAIN_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
           
-          # [TRIK EXTRA WCH]: Temukan berkas .ipsw yang diunduh oleh build.sh untuk mengekstrak WCH secara paksa sebelum dibungkus
-          IPSW_FILE=$(find . -maxdepth 1 -name "*.ipsw" | head -n 1)
-          if [[ -f "$IPSW_FILE" ]]; then
-            echo "=== Forcing WCH Extraction from $IPSW_FILE ==="
-            ipsw extract --coproc wch "$IPSW_FILE" 2>/dev/null || true
-          else
-            # Jika diunduh di dalam folder bootchain internal
-            INTERNAL_IPSW=$(find bootchain/ -name "*.ipsw" | head -n 1)
-            if [[ -f "$INTERNAL_IPSW" ]]; then
-              echo "=== Forcing WCH Extraction from internal path $INTERNAL_IPSW ==="
-              ipsw extract --coproc wch "$INTERNAL_IPSW" 2>/dev/null || true
-            fi
-          fi
-          
           mkdir -p artifact/bootchain
           
-          # Menyalin komponen mentah IMG4 dan BIN dari folder kerja ke folder hasil ramdisk sebelum dihapus skrip lokal
+          # Menyalin komponen mentah IMG4 dan BIN termasuk file WCH yang diselamatkan pemantau
           echo "=== Saving all standalone coprocessor firmware files ==="
           cp -v *.img4 *.bin *.plist chain.info "$BOOTCHAIN_DIR"/ 2>/dev/null || true
           
