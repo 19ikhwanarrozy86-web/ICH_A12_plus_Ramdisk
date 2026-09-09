@@ -1,4 +1,4 @@
-name: Build A12 / A13 Universal Complete Ramdisk
+name: Build A12 / A13 Complete Ramdisk
 
 on:
   workflow_dispatch:
@@ -256,7 +256,6 @@ jobs:
           du -ah bootchain
           echo "=== chain.info ==="
           cat bootchain/*/chain.info || true
-
 
       - name: Package artifact
         run: |
