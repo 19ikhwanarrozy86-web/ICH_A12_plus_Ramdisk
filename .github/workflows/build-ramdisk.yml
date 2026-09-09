@@ -1,4 +1,4 @@
-name: Build A12 / A13 Okeramdisk
+name: Build A12 / A13 Okeramdisk Ozi
 
 on:
   workflow_dispatch:
