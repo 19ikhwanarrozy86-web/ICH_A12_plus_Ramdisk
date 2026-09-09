@@ -1,10 +1,10 @@
-name: Build A12 / A13 Universal Complete Ramdisk
+nama: Build A12 / A13 Universal Complete Ramdisk
 
-on:
+pada:
   workflow_dispatch:
-    inputs:
-      device_target:
-        description: 'Target Device / Chip SoC'
+    masukan:
+      target_perangkat:
+        deskripsi: 'Perangkat Target / Chip SoC'
         required: true
         default: 'iphone11'
         type: choice
@@ -42,7 +42,7 @@ on:
         default: true
         type: boolean
 
-jobs:
+pekerjaan:
   build:
     runs-on: macos-15
     timeout-minutes: 45
@@ -141,11 +141,9 @@ jobs:
           set -e
           mv tools/darwin/irecovery tools/darwin/irecovery.stock
           
-          TARGET="${{ github.event.inputs.device_target }}"
+          TARGET="${{ github.event.inputs.target_perangkat }}"
           
-          # Pencocokan data DFU secara dinamis dan akurat untuk A12 & A13
           case "$TARGET" in
-            # === KELUARGA A13 (CPID: 0x8030) ===
             "iphone11")
               PROD="iPhone12,1" ; MODEL="N104AP" ; CPID="0x8030" ; NAME="iPhone 11" ; CHIP="A13 / T8030" ;;
             "iphone11pro")
@@ -156,8 +154,6 @@ jobs:
               PROD="iPhone12,8" ; MODEL="A2275AP" ; CPID="0x8030" ; NAME="iPhone SE (2nd Gen)" ; CHIP="A13 / T8030" ;;
             "ipad9")
               PROD="iPad12,1" ; MODEL="J317AP" ; CPID="0x8030" ; NAME="iPad (9th Gen)" ; CHIP="A13 / T8030" ;;
-            
-            # === KELUARGA A12 (CPID: 0x8020) ===
             "iphonexr")
               PROD="iPhone11,8" ; MODEL="N841AP" ; CPID="0x8020" ; NAME="iPhone XR" ; CHIP="A12 / T8020" ;;
             "iphonexs")
@@ -251,8 +247,10 @@ jobs:
           
           ./build.sh $ARGS
 
-            - name: Inspect bootchain (lanjutan)
+      - name: Inspect bootchain
         run: |
+          set -e
+          echo "=== Bootchain files ==="
           find bootchain -type f -print
           echo "=== Bootchain sizes ==="
           du -ah bootchain
@@ -290,16 +288,16 @@ jobs:
           
           echo "${{ github.sha }}" > artifact/source-commit.txt
           
-          tar -czf "${{ github.event.inputs.device_target }}-ramdisk.tar.gz" -C artifact .
+          tar -czf "${{ github.event.inputs.target_perangkat }}-ramdisk.tar.gz" -C artifact .
           
           echo "=== Final artifact ==="
           find artifact -type f
-          du -ah artifact "${{ github.event.inputs.device_target }}-ramdisk.tar.gz"
+          du -ah artifact "${{ github.event.inputs.target_perangkat }}-ramdisk.tar.gz"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: "${{ github.event.inputs.device_target }}-ramdisk-${{ github.event.inputs.ios_version }}"
+          name: "${{ github.event.inputs.target_perangkat }}-ramdisk-${{ github.event.inputs.ios_version }}"
           path: |
             artifact/
             *-ramdisk.tar.gz
