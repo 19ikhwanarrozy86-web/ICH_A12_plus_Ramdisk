@@ -1,4 +1,4 @@
-name: Build A12 / A13 Custom Ramdisk
+name: Build A12 / A13 Universal Complete Ramdisk
 
 on:
   workflow_dispatch:
@@ -9,9 +9,20 @@ on:
         default: 'iphone11'
         type: choice
         options:
+          # === KELUARGA CHIP A13 BIONIC ===
           - iphone11
+          - iphone11pro
+          - iphone11promax
+          - iphonese2
+          - ipad9
+          # === KELUARGA CHIP A12 BIONIC ===
           - iphonexr
           - iphonexs
+          - iphonexsmax
+          - ipadair3
+          - ipadmini5
+          - ipad8
+
       ios_version:
         description: 'iOS version or Build ID (e.g. 26.5.2 or 23F84)'
         required: true
@@ -79,10 +90,7 @@ jobs:
             [[ -f "$f" ]] || { echo "MISS: $f" >&2; exit 1; }
             echo "OK: $f"
           done
-          for r in resources/IM4M_0x8030 resources/ssh.tar.gz resources/sshtarlist.txt; do
-            # Catatan: Jika dependensi lokal membutuhkan berkas IM4M spesifik A12 (0x8020), pastikan berkas tersebut ada di repositori Anda.
-            echo "Checking essential resources..."
-          done
+          echo "Skipping static resource check to allow cross-device build..."
           chmod +x tools/darwin/*
           for t in pzb img4 gtar trustcache jq; do
             [[ -x "tools/darwin/$t" ]] || { echo "MISS: tool $t" >&2; exit 1; }
@@ -128,23 +136,44 @@ jobs:
           PY
           diff -u env.sh.bak env.sh || true
 
-      - name: Replace irecovery with Dynamic CI shim
+      - name: Replace irecovery with Complete Dynamic CI shim
         run: |
           set -e
           mv tools/darwin/irecovery tools/darwin/irecovery.stock
           
-          # Membuat konfigurasi data dinamis berdasarkan input user
           TARGET="${{ github.event.inputs.device_target }}"
           
-          if [[ "$TARGET" == "iphonexr" ]]; then
-            PROD="iPhone11,8" ; MODEL="N841AP" ; CPID="0x8020" ; NAME="iPhone XR" ; CHIP="A12 / T8020"
-          elif [[ "$TARGET" == "iphonexs" ]]; then
-            PROD="iPhone11,2" ; MODEL="D321AP" ; CPID="0x8020" ; NAME="iPhone XS" ; CHIP="A12 / T8020"
-          else
-            PROD="iPhone12,1" ; MODEL="N104AP" ; CPID="0x8030" ; NAME="iPhone 11" ; CHIP="A13 / T8030"
-          fi
+          # Pencocokan data DFU secara dinamis dan akurat untuk A12 & A13
+          case "$TARGET" in
+            # === KELUARGA A13 (CPID: 0x8030) ===
+            "iphone11")
+              PROD="iPhone12,1" ; MODEL="N104AP" ; CPID="0x8030" ; NAME="iPhone 11" ; CHIP="A13 / T8030" ;;
+            "iphone11pro")
+              PROD="iPhone12,3" ; MODEL="D421AP" ; CPID="0x8030" ; NAME="iPhone 11 Pro" ; CHIP="A13 / T8030" ;;
+            "iphone11promax")
+              PROD="iPhone12,5" ; MODEL="D431AP" ; CPID="0x8030" ; NAME="iPhone 11 Pro Max" ; CHIP="A13 / T8030" ;;
+            "iphonese2")
+              PROD="iPhone12,8" ; MODEL="A2275AP" ; CPID="0x8030" ; NAME="iPhone SE (2nd Gen)" ; CHIP="A13 / T8030" ;;
+            "ipad9")
+              PROD="iPad12,1" ; MODEL="J317AP" ; CPID="0x8030" ; NAME="iPad (9th Gen)" ; CHIP="A13 / T8030" ;;
+            
+            # === KELUARGA A12 (CPID: 0x8020) ===
+            "iphonexr")
+              PROD="iPhone11,8" ; MODEL="N841AP" ; CPID="0x8020" ; NAME="iPhone XR" ; CHIP="A12 / T8020" ;;
+            "iphonexs")
+              PROD="iPhone11,2" ; MODEL="D321AP" ; CPID="0x8020" ; NAME="iPhone XS" ; CHIP="A12 / T8020" ;;
+            "iphonexsmax")
+              PROD="iPhone11,6" ; MODEL="D331pAP" ; CPID="0x8020" ; NAME="iPhone XS Max" ; CHIP="A12 / T8020" ;;
+            "ipadair3")
+              PROD="iPad11,3" ; MODEL="J217AP" ; CPID="0x8020" ; NAME="iPad Air (3rd Gen)" ; CHIP="A12 / T8020" ;;
+            "ipadmini5")
+              PROD="iPad11,1" ; MODEL="J210AP" ; CPID="0x8020" ; NAME="iPad mini (5th Gen)" ; CHIP="A12 / T8020" ;;
+            "ipad8")
+              PROD="iPad11,6" ; MODEL="J171AP" ; CPID="0x8020" ; NAME="iPad (8th Gen)" ; CHIP="A12 / T8020" ;;
+            *)
+              echo "ERROR: Unknown device variant" >&2 ; exit 1 ;;
+          esac
           
-          # Menyimpan variabel ke lingkungan GitHub agar bisa dipakai di step lain
           echo "SHIM_PRODUCT=$PROD" >> "$GITHUB_ENV"
           echo "SHIM_MODEL=$MODEL" >> "$GITHUB_ENV"
           echo "SHIM_CPID=$CPID" >> "$GITHUB_ENV"
@@ -222,10 +251,8 @@ jobs:
           
           ./build.sh $ARGS
 
-      - name: Inspect bootchain
+            - name: Inspect bootchain (lanjutan)
         run: |
-          set -e
-          echo "=== Bootchain files ==="
           find bootchain -type f -print
           echo "=== Bootchain sizes ==="
           du -ah bootchain
@@ -263,10 +290,8 @@ jobs:
           
           echo "${{ github.sha }}" > artifact/source-commit.txt
           
-      # Penamaan file arsip dinamis berdasarkan input perangkat
-      - name: Package artifact (lanjutan)
-        run: |
           tar -czf "${{ github.event.inputs.device_target }}-ramdisk.tar.gz" -C artifact .
+          
           echo "=== Final artifact ==="
           find artifact -type f
           du -ah artifact "${{ github.event.inputs.device_target }}-ramdisk.tar.gz"
