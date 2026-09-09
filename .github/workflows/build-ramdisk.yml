@@ -269,6 +269,12 @@ jobs:
           echo "BOOTCHAIN_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
           
           mkdir -p artifact/bootchain
+          
+          # [TRIK PENYELAMAT]: Salin semua komponen mentah IMG4 dan BIN dari folder kerja saat ini ke folder bootchain artifact
+          echo "=== Saving all standalone coprocessor firmware files ==="
+          cp -v *.img4 *.bin *.plist chain.info "$BOOTCHAIN_DIR"/ 2>/dev/null || true
+          
+          # Pindahkan semua isi bootchain ke folder siap unggah
           cp -R "$BOOTCHAIN_DIR"/* artifact/bootchain/
           
           cat > artifact/BUILD-INFO.txt << EOF
