@@ -1,4 +1,4 @@
-name: Build A12 / A13 oke kakak
+name: Build A12 / A13 Okeramdisk
 
 on:
   workflow_dispatch:
@@ -88,7 +88,7 @@ jobs:
           set -e
           for f in build.sh env.sh scripts/devices.sh scripts/ramdisk_expand.sh patch/iboot_patchfinder.py patch/apply_kernel_patches.py patch/finalize_iboot.py patch/preflight.py; do
             [[ -f "$f" ]] || { echo "MISS: $f" >&2; exit 1; }
-            echo "OK: $f"
+            echo "OK: f"
           done
           echo "Skipping static resource check to allow cross-device build..."
           chmod +x tools/darwin/*
@@ -267,6 +267,20 @@ jobs:
           fi
           BUILD_NAME=$(basename "$BOOTCHAIN_DIR")
           echo "BOOTCHAIN_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
+          
+          # [TRIK EXTRA WCH]: Temukan berkas .ipsw yang diunduh oleh build.sh untuk mengekstrak WCH secara paksa sebelum dibungkus
+          IPSW_FILE=$(find . -maxdepth 1 -name "*.ipsw" | head -n 1)
+          if [[ -f "$IPSW_FILE" ]]; then
+            echo "=== Forcing WCH Extraction from $IPSW_FILE ==="
+            ipsw extract --coproc wch "$IPSW_FILE" 2>/dev/null || true
+          else
+            # Jika diunduh di dalam folder bootchain internal
+            INTERNAL_IPSW=$(find bootchain/ -name "*.ipsw" | head -n 1)
+            if [[ -f "$INTERNAL_IPSW" ]]; then
+              echo "=== Forcing WCH Extraction from internal path $INTERNAL_IPSW ==="
+              ipsw extract --coproc wch "$INTERNAL_IPSW" 2>/dev/null || true
+            fi
+          fi
           
           mkdir -p artifact/bootchain
           
