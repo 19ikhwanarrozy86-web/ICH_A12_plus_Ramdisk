@@ -1,230 +1,4 @@
-name: Build A12 / A13 Okeramdisk Ozi
-
-on:
-  workflow_dispatch:
-    inputs:
-      target_perangkat:
-        description: 'Perangkat Target / Chip SoC'
-        required: true
-        default: 'iphone11'
-        type: choice
-        options:
-          # === KELUARGA CHIP A13 BIONIC ===
-          - iphone11
-          - iphone11pro
-          - iphone11promax
-          - iphonese2
-          - ipad9
-          # === KELUARGA CHIP A12 BIONIC ===
-          - iphonexr
-          - iphonexs
-          - iphonexsmax
-          - ipadair3
-          - ipadmini5
-          - ipad8
-
-      ios_version:
-        description: 'iOS version or Build ID (e.g. 26.5.2 or 23F84)'
-        required: true
-        default: '23F84'
-        type: string
-      kernel:
-        description: 'Kernel patch mode'
-        required: true
-        default: 'patched'
-        type: choice
-        options:
-          - patched
-          - stock
-      with_fw:
-        description: 'Include coprocessor firmware (AOP/ANE/AVE/ISP/GFX/SIO/PMP)'
-        required: true
-        default: true
-        type: boolean
-
-jobs:
-  build:
-    runs-on: macos-15
-    timeout-minutes: 45
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Show environment
-        run: |
-          echo "=== macOS Version ==="
-          sw_vers
-          echo "=== Architecture ==="
-          uname -m
-          echo "=== PATH ==="
-          tr ':' '\n' <<< "$PATH"
-
-      - name: Install system dependencies
-        run: |
-          set -e
-          brew update
-          brew install ipsw curl python@3
-          which ipsw || { echo "FAIL: ipsw not installed" >&2; exit 1; }
-          which python3 || { echo "FAIL: python3 not installed" >&2; exit 1; }
-          echo "OK: ipsw $(ipsw version 2>/dev/null | head -1)"
-
-      - name: Setup Python venv
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          python -m pip install --upgrade pip
-          if [[ -f requirements.txt ]]; then
-            python -m pip install -r requirements.txt
-          else
-            echo "WARNING: requirements.txt missing, installing known deps"
-            python -m pip install pyimg4 capstone pillow
-          fi
-          python -c "import pyimg4, capstone; print('OK: pyimg4 + capstone')"
-          echo "VENV_PYTHON=$(pwd)/.venv/bin/python" >> "$GITHUB_ENV"
-
-      - name: Verify repository structure
-        run: |
-          set -e
-          for f in build.sh env.sh scripts/devices.sh scripts/ramdisk_expand.sh patch/iboot_patchfinder.py patch/apply_kernel_patches.py patch/finalize_iboot.py patch/preflight.py; do
-            [[ -f "$f" ]] || { echo "MISS: $f" >&2; exit 1; }
-            echo "OK: f"
-          done
-          echo "Skipping static resource check to allow cross-device build..."
-          chmod +x tools/darwin/*
-          for t in pzb img4 gtar trustcache jq; do
-            [[ -x "tools/darwin/$t" ]] || { echo "MISS: tool $t" >&2; exit 1; }
-            echo "OK: tool: $t"
-          done
-
-      - name: Patch build.sh for case-insensitive DeviceClass
-        run: |
-          set -e
-          cp build.sh build.sh.bak
-          python3 << 'PY'
-          import sys
-          with open('build.sh', 'r') as f:
-              content = f.read()
-          orig = 'if item.get("Info", {}).get("DeviceClass") == board'
-          repl = 'if item.get("Info", {}).get("DeviceClass", "").lower() == board.lower()'
-          if orig not in content:
-              print("WARNING: original pattern not found; build.sh may already be patched or changed")
-              sys.exit(0)
-          content = content.replace(orig, repl)
-          with open('build.sh', 'w') as f:
-              f.write(content)
-          print("Patched build.sh: case-insensitive DeviceClass matching")
-          PY
-          diff -u build.sh.bak build.sh || true
-
-      - name: Patch env.sh so a CI venv actually gets used
-        run: |
-          set -e
-          cp env.sh env.sh.bak
-          python3 << 'PY'
-          with open('env.sh', 'r') as f:
-              content = f.read()
-          orig = 'export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$NR_TOOLS${PATH:+:$PATH}"'
-          repl = 'export PATH="${VIRTUAL_ENV:+$VIRTUAL_ENV/bin:}/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$NR_TOOLS${PATH:+:$PATH}"'
-          if orig not in content:
-              print("WARNING: env.sh PATH line not found as expected; leaving untouched")
-          else:
-              content = content.replace(orig, repl)
-              with open('env.sh', 'w') as f:
-                  f.write(content)
-              print("Patched env.sh: python3 now prefers an active venv over system python3")
-          PY
-          diff -u env.sh.bak env.sh || true
-
-      - name: Replace irecovery with Complete Dynamic CI shim
-        run: |
-          set -e
-          mv tools/darwin/irecovery tools/darwin/irecovery.stock
-          
-          TARGET="${{ github.event.inputs.target_perangkat }}"
-          
-          case "$TARGET" in
-            "iphone11")
-              PROD="iPhone12,1" ; MODEL="N104AP" ; CPID="0x8030" ; NAME="iPhone 11" ; CHIP="A13 / T8030" ;;
-            "iphone11pro")
-              PROD="iPhone12,3" ; MODEL="D421AP" ; CPID="0x8030" ; NAME="iPhone 11 Pro" ; CHIP="A13 / T8030" ;;
-            "iphone11promax")
-              PROD="iPhone12,5" ; MODEL="D431AP" ; CPID="0x8030" ; NAME="iPhone 11 Pro Max" ; CHIP="A13 / T8030" ;;
-            "iphonese2")
-              PROD="iPhone12,8" ; MODEL="A2275AP" ; CPID="0x8030" ; NAME="iPhone SE (2nd Gen)" ; CHIP="A13 / T8030" ;;
-            "ipad9")
-              PROD="iPad12,1" ; MODEL="J317AP" ; CPID="0x8030" ; NAME="iPad (9th Gen)" ; CHIP="A13 / T8030" ;;
-            "iphonexr")
-              PROD="iPhone11,8" ; MODEL="N841AP" ; CPID="0x8020" ; NAME="iPhone XR" ; CHIP="A12 / T8020" ;;
-            "iphonexs")
-              PROD="iPhone11,2" ; MODEL="D321AP" ; CPID="0x8020" ; NAME="iPhone XS" ; CHIP="A12 / T8020" ;;
-            "iphonexsmax")
-              PROD="iPhone11,6" ; MODEL="D331pAP" ; CPID="0x8020" ; NAME="iPhone XS Max" ; CHIP="A12 / T8020" ;;
-            "ipadair3")
-              PROD="iPad11,3" ; MODEL="J217AP" ; CPID="0x8020" ; NAME="iPad Air (3rd Gen)" ; CHIP="A12 / T8020" ;;
-            "ipadmini5")
-              PROD="iPad11,1" ; MODEL="J210AP" ; CPID="0x8020" ; NAME="iPad mini (5th Gen)" ; CHIP="A12 / T8020" ;;
-            "ipad8")
-              PROD="iPad11,6" ; MODEL="J171AP" ; CPID="0x8020" ; NAME="iPad (8th Gen)" ; CHIP="A12 / T8020" ;;
-            *)
-              echo "ERROR: Unknown device variant" >&2 ; exit 1 ;;
-          esac
-          
-          echo "SHIM_PRODUCT=$PROD" >> "$GITHUB_ENV"
-          echo "SHIM_MODEL=$MODEL" >> "$GITHUB_ENV"
-          echo "SHIM_CPID=$CPID" >> "$GITHUB_ENV"
-          echo "SHIM_NAME=$NAME" >> "$GITHUB_ENV"
-          echo "SHIM_CHIP=$CHIP" >> "$GITHUB_ENV"
-
-          cat > tools/darwin/irecovery << EOF
-          #!/bin/bash
-          if [[ "\$1" == "-q" ]]; then
-            cat << 'INNER'
-          PRODUCT: $PROD
-          MODEL: $MODEL
-          CPID: $CPID
-          MODE: DFU
-          PWND: usbliter8
-          ECID: 0000000000000000
-          NAME: $NAME
-          INNER
-          else
-            echo "irecovery shim: unsupported args: \$@" >&2
-            exit 1
-          fi
-          EOF
-          
-          chmod +x tools/darwin/irecovery
-          echo "=== Dynamic Shim test ($NAME) ==="
-          tools/darwin/irecovery -q
-
-      - name: Pre-build debug — inspect BuildManifest
-        run: |
-          set +e
-          source .venv/bin/activate
-          mkdir -p /tmp/bm_debug
-          cd /tmp/bm_debug
-          echo "=== Downloading BuildManifest via ipsw CLI for $SHIM_PRODUCT ==="
-          ipsw download ipsw --device "$SHIM_PRODUCT" --build "${{ github.event.inputs.ios_version }}" --build-manifest --output .
-          if [[ -f BuildManifest.plist ]]; then
-            python3 << 'PY'
-          import plistlib
-          try:
-              manifest = plistlib.loads(open("BuildManifest.plist", "rb").read())
-              identities = manifest.get("BuildIdentities", [])
-              print("=== BUILD IDENTITIES ===")
-              for i, ident in enumerate(identities):
-                  info = ident.get("Info", {})
-                  print(f"Index {i}: DeviceClass={info.get('DeviceClass','N/A')} ProductType={info.get('ProductType','N/A')} BoardConfig={info.get('BoardConfig','N/A')} BuildNumber={info.get('BuildNumber','N/A')} RestoreBehavior={info.get('RestoreBehavior','N/A')}")
-          except Exception as e:
-              print(f"Failed to parse BuildManifest: {e}")
-          PY
-          else
-            echo "WARNING: Could not download BuildManifest for debug inspection"
-          fi
-          cd -
-
-      - name: Build bootchain
+      - name: Build bootchain baru
         run: |
           set -e
           source .venv/bin/activate
@@ -245,20 +19,29 @@ jobs:
           echo "With-FW: ${{ github.event.inputs.with_fw }}"
           echo "==========================="
           
-          # [SOLUSI MUTLAK WCH]: Menjalankan pemantau latar belakang untuk menangkap berkas IPSW sebelum dihapus
+          # [SOLUSI AKURAT WCH]: Proses latar belakang untuk memaksa ekstraksi seluruh variasi nama chip daya nirkabel Apple
           (
-            echo "=== Pemantau IPSW Latar Belakang Aktif ==="
-            for i in {1..30}; do
+            echo "=== Pemantau Chip Daya Latar Belakang Aktif ==="
+            for i in {1..35}; do
               IPSW_FILE=$(find . -maxdepth 2 -name "*.ipsw" | head -n 1)
               if [[ -f "$IPSW_FILE" ]]; then
-                echo "=== IPSW Ditemukan: $IPSW_FILE. Mengekstrak WCH secara paksa... ==="
+                echo "=== IPSW Terdeteksi: $IPSW_FILE. Mengekstrak komponen daya nirkabel... ==="
+                
+                # Mencoba ekstraksi dengan 3 variasi nama sirkuit resmi Apple (wch, chg, wep)
                 ipsw extract --coproc wch "$IPSW_FILE" 2>/dev/null || true
-                if [[ -f "WCH.img4" || -f "Wch.img4" || -f "WirelessPower.img4" ]]; then
-                  echo "=== SUKSES: Komponen WCH Berhasil Diekstrak! ==="
+                ipsw extract --coproc chg "$IPSW_FILE" 2>/dev/null || true
+                ipsw extract --coproc wep "$IPSW_FILE" 2>/dev/null || true
+                
+                # Melakukan pencarian jika ada file ekstraksi yang bernama lain lalu mengubah namanya ke WCH.img4
+                FOUND_WCH=$(find . -maxdepth 1 \( -name "*WCH*" -o -name "*Wch*" -o -name "*wch*" -o -name "*CHG*" -o -name "*chg*" -o -name "*WEP*" -o -name "*wep*" \) -name "*.img4")
+                if [[ -not -z "$FOUND_WCH" ]]; then
+                  echo "=== Komponen Daya Ditemukan: $FOUND_WCH ==="
+                  cp "$FOUND_WCH" WCH.img4 2>/dev/null || true
+                  echo "=== SUKSES: Berkas WCH.img4 Berhasil Diamankan! ==="
                   break
                 fi
               fi
-              sleep 20
+              sleep 15
             done
           ) &
           
@@ -277,7 +60,7 @@ jobs:
           
           mkdir -p artifact/bootchain
           
-          # Menyalin komponen mentah IMG4 dan BIN termasuk file WCH yang diselamatkan pemantau
+          # Menyalin seluruh komponen mentah IMG4 dan BIN termasuk berkas WCH yang dipaksa keluar
           echo "=== Saving all standalone coprocessor firmware files ==="
           cp -v *.img4 *.bin *.plist chain.info "$BOOTCHAIN_DIR"/ 2>/dev/null || true
           
